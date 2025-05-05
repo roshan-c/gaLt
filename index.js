@@ -2,6 +2,9 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import fetch from 'node-fetch';
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, NoSubscriberBehavior, getVoiceConnection } from '@discordjs/voice';
+import play from 'play-dl';
+import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 
 // Load environment variables
 dotenv.config();
@@ -21,6 +24,17 @@ const client = new Client({
 });
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+// ====== YOUTUBE URL LIST (FILL THIS IN YOURSELF) =====
+const YOUTUBE_URLS = [
+  // Example:
+  // 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+  // 'https://www.youtube.com/watch?v=someOtherId',
+  'https://www.youtube.com/watch?v=-lGFpyuuchg&pp=ygULY2hpbmVzZSByYXA%3D',
+];
+
+// Voice channel and command settings
+const VOICE_CHANNEL_ID = '272797119457525762';
 
 async function askGeminiWithGrounding(prompt) {
   try {
@@ -83,6 +97,87 @@ async function askOpenRouter(prompt, model = "deepseek/deepseek-chat-v3-0324:fre
   }
 }
 
+async function joinAndPlayRandomYoutube(guild) {
+  try {
+    if (!YOUTUBE_URLS.length) {
+      console.log('No YouTube URLs in the list!');
+      return 'No YouTube videos are configured.';
+    }
+    const channel = guild.channels.cache.get(VOICE_CHANNEL_ID);
+    if (!channel || channel.type !== 2) { // 2 = voice
+      console.log('Voice channel not found or not a voice channel.');
+      return 'Voice channel not found.';
+    }
+    // Join channel
+    const connection = joinVoiceChannel({
+      channelId: VOICE_CHANNEL_ID,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+    });
+    // Pick random URL
+    const url = YOUTUBE_URLS[Math.floor(Math.random() * YOUTUBE_URLS.length)];
+    console.log('Selected YouTube URL:', url);
+    // Stream audio
+    const stream = await play.stream(url);
+    const resource = createAudioResource(stream.stream, { inputType: stream.type });
+    const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
+    player.play(resource);
+    connection.subscribe(player);
+    player.on(AudioPlayerStatus.Idle, () => {
+      console.log('Playback finished, destroying connection.');
+      connection.destroy();
+    });
+    player.on('error', err => {
+      console.error('Audio player error:', err);
+      connection.destroy();
+    });
+    return `Joined and playing: ${url}`;
+  } catch (err) {
+    console.error('Failed to join/play YouTube:', err);
+    return 'Failed to join or play the YouTube video.';
+  }
+}
+
+// Register slash command on startup
+async function registerSlashCommands() {
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('joinvoice')
+      .setDescription('Join the specified voice channel and play a random YouTube video'),
+  ].map(cmd => cmd.toJSON());
+
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+  try {
+    console.log('Registering slash commands...');
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands },
+    );
+    console.log('Slash commands registered.');
+  } catch (err) {
+    console.error('Failed to register slash commands:', err);
+  }
+}
+
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user.tag}!`);
+  await registerSlashCommands();
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName === 'joinvoice') {
+    if (interaction.guild && interaction.channelId === '1368705925808132136') {
+      await interaction.deferReply();
+      const result = await joinAndPlayRandomYoutube(interaction.guild);
+      await interaction.editReply(result);
+    } else {
+      await interaction.reply({ content: 'This command can only be used in the designated text channel.', ephemeral: true });
+    }
+  }
+});
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.mentions.has(client.user)) return;
@@ -137,10 +232,6 @@ client.on('messageCreate', async (message) => {
     console.error('Failed to reply to Discord:', err);
   }
   console.log('---');
-});
-
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}!`);
 });
 
 client.login(DISCORD_TOKEN);
