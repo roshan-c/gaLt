@@ -239,7 +239,13 @@ client.on('messageCreate', async (message) => {
         if (attachment.contentType && attachment.contentType.startsWith('image/')) {
           try {
             const imgBuffer = await downloadImageToBuffer(attachment.url);
-            images.push(imgBuffer);
+            const base64 = imgBuffer.toString('base64');
+            images.push({
+              inlineData: {
+                data: base64,
+                mimeType: attachment.contentType
+              }
+            });
           } catch (err) {
             console.error('Failed to download/process image attachment:', err);
           }
