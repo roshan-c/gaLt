@@ -2,3 +2,5 @@
 .env
 geminigrounding.md
 openrouterexample.js
+/chat_history
+/full_history
