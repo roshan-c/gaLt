@@ -7,7 +7,7 @@ WORKDIR /usr/src/app
 # Install dependencies
 COPY package*.json ./
 # If you have a bun.lockb file, you should also copy it:
-# COPY bun.lockb ./
+COPY bun.lock ./
 RUN bun install --production
 
 # Copy source code
