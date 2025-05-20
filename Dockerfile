@@ -1,15 +1,17 @@
-# Use official Node.js 18 image
-FROM node:18-slim
+# Use official Bun image
+FROM oven/bun:1
 
 # Set working directory
 WORKDIR /usr/src/app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev
+# If you have a bun.lockb file, you should also copy it:
+# COPY bun.lockb ./
+RUN bun install --production
 
 # Copy source code
 COPY . .
 
 # Start the bot
-CMD ["npm", "start"] 
+CMD ["bun", "start"] 
