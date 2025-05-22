@@ -39,6 +39,8 @@ A Discord bot that uses Google's Gemini API to provide helpful responses, summar
 - **@gaLt [message]**: Mention the bot with any message to get an AI-powered response
 - **/summarize**: Generates a summary of the last 15 messages in the current channel
 - **/ping**: Simple test command to check if the bot is responding correctly
+- **/generateimage**: Generates an image based on a text prompt using Gemini.
+  - **Required Option**: `prompt` (string) - The text you want to use to generate the image.
 - **!summarize**: Alternative text command for summarization (fallback if slash commands aren't working)
 
 ## Configuration Options
