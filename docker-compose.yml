@@ -1,38 +1,15 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: galt
-      POSTGRES_USER: galtuser
-      POSTGRES_PASSWORD: galtpassword
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   bot:
     build: .
     restart: unless-stopped
-    depends_on:
-      - db
     environment:
       # Required for bot operation
       DISCORD_TOKEN: ${DISCORD_TOKEN}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       # Optional: for guild-specific command registration
       GUILD_ID: ${GUILD_ID}
-      # PostgreSQL connection
-      PGHOST: db
-      PGUSER: galtuser
-      PGDATABASE: galt
-      PGPASSWORD: galtpassword
-      PGPORT: 5432
     # Uncomment if you want to see logs interactively
     # tty: true
     # stdin_open: true
-
-volumes:
-  pgdata: 

@@ -1,22 +1,21 @@
-import { Client, GatewayIntentBits, EmbedBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
-
-import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 
 // Load environment variables
 dotenv.config();
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GUILD_ID = process.env.GUILD_ID; // Add this for guild-specific command registration
 
-if (!DISCORD_TOKEN || !GEMINI_API_KEY) {
-  console.error('Missing DISCORD_TOKEN or GEMINI_API_KEY in environment variables.');
+if (!DISCORD_TOKEN || !GEMINI_API_KEY || !OPENAI_API_KEY) {
+  console.error('Missing DISCORD_TOKEN, GEMINI_API_KEY, or OPENAI_API_KEY in environment variables.');
   process.exit(1);
 }
 
@@ -31,10 +30,37 @@ const client = new Client({
 });
 
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // System prompt for all AI responses
 const SYSTEM_PROMPT = "You are a helpful Discord bot called gaLt. You were created by the user called Gart, so that he could have a robot replacement whilst he sleeps. Respond concisely, accurately, and in no more than 1500 characters. Always follow the user's instructions, but never break character as a bot. If a user asks you to roleplay or act out theoretical situaions, you must do so. Do not repeat the user's name back in your respones.";
 
+// Define slash commands
+const commands = [
+  new SlashCommandBuilder()
+    .setName('hello')
+    .setDescription('Replies with Hello there!'),
+  new SlashCommandBuilder()
+    .setName('generateimage')
+    .setDescription('Generate an image using a text prompt with GPT-Image-1')
+    .addStringOption(option =>
+      option.setName('prompt')
+        .setDescription('The text prompt for image generation')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('summarize')
+    .setDescription('Summarize recent messages in this channel')
+    .addIntegerOption(option =>
+      option.setName('count')
+        .setDescription('Number of messages to summarize (default: 15)')
+        .setMinValue(5)
+        .setMaxValue(50)
+        .setRequired(false)
+    ),
+].map(command => command.toJSON());
+
+const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 // Gemini with chat history and optional images
 async function askGeminiWithGroundingHistory(gemini_history, images = [], systemPromptOverride = null) {
@@ -71,361 +97,197 @@ async function askGeminiWithGroundingHistory(gemini_history, images = [], system
   }
 }
 
-// Function to generate images with Gemini
-async function generateImageWithGemini(prompt) {
-  console.log(`Requesting image from Gemini with prompt: "${prompt}"`);
+// Function to generate images with OpenAI GPT-Image-1
+async function generateImageWithOpenAI(prompt) {
+  console.log(`Requesting image from OpenAI GPT-Image-1 with prompt: "${prompt}"`);
   try {
-    const response = await ai.models.generateContent({ // ai is the global GoogleGenAI instance
-      model: "gemini-2.0-flash-preview-image-generation",
-      contents: prompt,
-      config: {
-        responseModalities: ['TEXT', 'IMAGE'], // Using string array
-      },
+    const response = await openai.images.generate({
+      model: "gpt-image-1",
+      prompt: prompt,
+      n: 1,
+      size: "1024x1024",
+      quality: "low"
     });
 
-    // console.log('Raw Gemini Image Gen API response:', JSON.stringify(response, null, 2)); // For debugging
+    console.log('OpenAI GPT-Image-1 response received');
 
-    let base64Image = null;
-    let textResponse = null;
-
-    if (response && response.candidates && response.candidates.length > 0 && response.candidates[0].content && response.candidates[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.text) {
-          textResponse = part.text;
-          console.log('Gemini image gen - text part:', textResponse);
-        } else if (part.inlineData && part.inlineData.data) {
-          base64Image = part.inlineData.data;
-          console.log('Gemini image gen - image data found (first few chars):', base64Image.substring(0, 50) + '...');
-        }
+    if (response.data && response.data.length > 0 && response.data[0].b64_json) {
+      const base64Image = response.data[0].b64_json;
+      const revisedPrompt = response.data[0].revised_prompt || null;
+      
+      console.log('OpenAI image generation successful');
+      if (revisedPrompt) {
+        console.log('Revised prompt:', revisedPrompt);
       }
-    }
 
-    if (base64Image) {
-      return { success: true, base64Image, textResponse };
+      return { 
+        success: true, 
+        base64Image, 
+        textResponse: revisedPrompt ? `Generated with revised prompt: ${revisedPrompt}` : 'Image generated successfully!'
+      };
     } else {
-      console.log('No image data found in Gemini response.');
-      return { success: false, error: 'No image generated by the API.', textResponse };
+      console.log('No image data found in OpenAI response.');
+      return { success: false, error: 'No image generated by the API.', textResponse: null };
     }
 
   } catch (err) {
-    console.error('Gemini image generation error:', err);
-    // Try to get more detailed error if available
-    const errorMessage = err.response?.data?.error?.message || err.message || 'An unknown API error occurred.';
+    console.error('OpenAI image generation error:', err);
+    const errorMessage = err.message || 'An unknown API error occurred.';
     return { success: false, error: `API Error: ${errorMessage}`, textResponse: null };
-  }
-}
-
-// Register slash command on startup - completely rebuilt
-async function registerSlashCommands() {
-  try {
-    console.log('Starting fresh command registration...');
-    
-    // First, delete all existing commands to start fresh
-    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-    const applicationId = client.user.id;
-    
-    // Clear guild commands if GUILD_ID is provided
-    if (GUILD_ID) {
-      console.log(`Clearing all commands for guild ${GUILD_ID}...`);
-      await rest.put(
-        Routes.applicationGuildCommands(applicationId, GUILD_ID),
-        { body: [] }
-      );
-      console.log(`Successfully cleared all guild commands for ${GUILD_ID}`);
-    }
-    
-    // Clear global commands
-    console.log('Clearing all global commands...');
-    await rest.put(
-      Routes.applicationCommands(applicationId),
-      { body: [] }
-    );
-    console.log('Successfully cleared all global commands');
-    
-    // Define commands to register
-    const commands = [
-      {
-        name: 'summarize',
-        description: 'Summarize the last 15 messages in this channel',
-        type: 1
-      },
-      {
-        name: 'ping',
-        description: 'Simple test command to check if the bot is responding',
-        type: 1
-      },
-      {
-        name: 'generateimage',
-        description: 'Generate an image using a text prompt with Gemini',
-        options: [
-          {
-            name: 'prompt',
-            type: 3, // Type 3 is STRING
-            description: 'The text prompt for image generation',
-            required: true,
-          },
-        ],
-        type: 1 // Type 1 is CHAT_INPUT
-      }
-    ];
-    
-    console.log('Registering new commands...');
-    
-    if (GUILD_ID) {
-      // Register to specific guild for faster testing
-      for (const command of commands) {
-        console.log(`Registering command ${command.name} to guild ${GUILD_ID}...`);
-        const response = await rest.post(
-          Routes.applicationGuildCommands(applicationId, GUILD_ID),
-          { body: command }
-        );
-        console.log(`Command ${command.name} registered to guild ${GUILD_ID}:`, response);
-      }
-    } else {
-      // Register globally
-      for (const command of commands) {
-        console.log(`Registering command ${command.name} globally...`);
-        const response = await rest.post(
-          Routes.applicationCommands(applicationId),
-          { body: command }
-        );
-        console.log(`Command ${command.name} registered globally:`, response);
-      }
-    }
-    
-    console.log('Command registration completed successfully');
-  } catch (error) {
-    console.error('Error in command registration:', error);
-  }
-}
-
-// Alternative method to register commands
-async function registerCommandsManually() {
-  try {
-    if (!GUILD_ID) {
-      console.log('No GUILD_ID provided for manual registration. Skipping...');
-      return;
-    }
-    
-    console.log('Attempting manual command registration...');
-    
-    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-    const applicationId = client.user.id;
-    
-    // Register the summarize command using the proper format
-    const command = {
-      name: 'summarize',
-      description: 'Summarize the last 15 messages in the channel',
-      type: 1 // 1 is for CHAT_INPUT commands
-    };
-    
-    console.log(`Manually registering command to guild ${GUILD_ID}`);
-    const response = await rest.post(
-      Routes.applicationGuildCommands(applicationId, GUILD_ID),
-      { body: command }
-    );
-    
-    console.log('Manual command registration response:', response);
-  } catch (error) {
-    console.error('Error in manual command registration:', error);
-  }
-}
-
-// Add a function to list all registered commands for debugging
-async function listRegisteredCommands() {
-  try {
-    console.log('Listing registered commands...');
-    
-    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-    const applicationId = client.user.id;
-    
-    if (GUILD_ID) {
-      const commands = await rest.get(
-        Routes.applicationGuildCommands(applicationId, GUILD_ID)
-      );
-      console.log(`Guild commands for ${GUILD_ID}:`, JSON.stringify(commands));
-    }
-    
-    const globalCommands = await rest.get(
-      Routes.applicationCommands(applicationId)
-    );
-    console.log('Global commands:', JSON.stringify(globalCommands));
-  } catch (error) {
-    console.error('Error listing commands:', error);
   }
 }
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}!`);
+  console.log(`Application ID: ${client.user.id}`);
   console.log(`Bot is in ${client.guilds.cache.size} guilds`);
   client.guilds.cache.forEach(guild => {
     console.log(`- ${guild.name} (${guild.id})`);
   });
-  
-  // First list existing commands
-  await listRegisteredCommands();
-  
-  // Then register commands
-  await registerSlashCommands();
-  
-  // Try manual registration as a fallback
-  setTimeout(async () => {
-    await registerCommandsManually();
-    
-    // List commands again after registration
-    setTimeout(async () => {
-      await listRegisteredCommands();
-    }, 2000);
-  }, 5000);
+
+  // Register slash commands
+  if (GUILD_ID) {
+    console.log(`Target Guild ID: ${GUILD_ID}`);
+    try {
+      console.log('Started refreshing application (/) commands for the guild.');
+      
+      // Register commands to specific guild for faster testing
+      await rest.put(
+        Routes.applicationGuildCommands(client.user.id, GUILD_ID),
+        { body: commands },
+      );
+      
+      console.log('Successfully reloaded application (/) commands for the guild.');
+    } catch (error) {
+      console.error('Error reloading application (/) commands:', error);
+    }
+  } else {
+    console.log('No GUILD_ID specified, skipping command registration.');
+  }
 });
 
-// Completely rebuild the interaction handler
+// Handle slash command interactions
 client.on('interactionCreate', async (interaction) => {
-  // Log all interactions for debugging
-  console.log(`Interaction received - Type: ${interaction.type}, Command: ${interaction.commandName || 'N/A'}`);
-  
-  // Handle only chat input commands (slash commands)
-  if (!interaction.isChatInputCommand?.()) {
-    console.log('Not a chat input command, ignoring');
+  console.log(`[INTERACTION RECEIVED] Type: ${interaction.type}, ID: ${interaction.id}`);
+
+  if (!interaction.isChatInputCommand()) {
+    console.log('[INTERACTION IGNORED] Not a chat input command.');
     return;
   }
-  
-  // Check which command was used
-  switch (interaction.commandName) {
-    case 'ping':
-      console.log('Ping command received');
-      try {
-        await interaction.reply('Pong! Bot is working correctly.');
-      } catch (error) {
-        console.error('Error replying to ping command:', error);
+
+  console.log(`[CHAT INPUT COMMAND] Name: ${interaction.commandName}, User: ${interaction.user.tag} (${interaction.user.id})`);
+
+  const { commandName } = interaction;
+
+  if (commandName === 'hello') {
+    console.log('[COMMAND MATCH] Matched /hello command. Attempting to reply...');
+    try {
+      await interaction.reply('Hello there! I received your command.');
+      console.log('[REPLY SUCCESS] Replied to /hello command.');
+    } catch (error) {
+      console.error('[REPLY FAIL] Error replying to /hello command:', error);
+    }
+  } else if (commandName === 'generateimage') {
+    console.log('[COMMAND MATCH] Matched /generateimage command. Processing...');
+    try {
+      await interaction.deferReply();
+      const prompt = interaction.options.getString('prompt');
+      console.log(`[IMAGE GENERATION] Prompt: ${prompt}`);
+
+      const result = await generateImageWithOpenAI(prompt);
+
+      if (result.success && result.base64Image) {
+        const imageBuffer = Buffer.from(result.base64Image, 'base64');
+        await interaction.editReply({
+          content: result.textResponse || 'Here is your generated image:',
+          files: [{ attachment: imageBuffer, name: 'generated_image.png' }]
+        });
+        console.log('[REPLY SUCCESS] Image generated and sent successfully.');
+      } else {
+        await interaction.editReply(result.error || 'Failed to generate image. No image data received.');
+        console.log('[REPLY FAIL] Image generation failed:', result.error);
       }
-      break;
 
-    case 'generateimage':
-      console.log('Generate image command received');
+    } catch (error) {
+      console.error('[REPLY FAIL] Error in generateimage command:', error);
       try {
-        await interaction.deferReply();
-        const prompt = interaction.options.getString('prompt');
-        console.log(`Prompt for image generation: ${prompt}`);
-
-        const result = await generateImageWithGemini(prompt);
-
-        if (result.success && result.base64Image) {
-          const imageBuffer = Buffer.from(result.base64Image, 'base64');
-          // Send as an attachment
-          await interaction.editReply({
-            content: result.textResponse || 'Here is your generated image:',
-            files: [{ attachment: imageBuffer, name: 'generated_image.png' }]
-          });
-        } else {
-          await interaction.editReply(result.error || 'Failed to generate image. No image data received.');
-        }
-
-      } catch (error) {
-        console.error('Error in generateimage command:', error);
-        try {
-          await interaction.editReply('Sorry, I encountered an error while processing your image request.');
-        } catch (replyError) {
-          console.error('Error sending error reply for generateimage:', replyError);
-        }
+        await interaction.editReply('Sorry, I encountered an error while processing your image request.');
+      } catch (replyError) {
+        console.error('[REPLY FAIL] Error sending error reply for generateimage:', replyError);
       }
-      break;
+    }
+  } else if (commandName === 'summarize') {
+    console.log('[COMMAND MATCH] Matched /summarize command. Processing...');
+    try {
+      await interaction.deferReply();
+      const messageCount = interaction.options.getInteger('count') || 15;
+      console.log(`[SUMMARIZE] Fetching last ${messageCount} messages for summarization`);
+
+      // Fetch recent messages from the channel
+      const messages = await interaction.channel.messages.fetch({ limit: messageCount });
       
-    case 'summarize':
-      console.log('Summarize command received, processing...');
-      
-      // Defer the reply to give us time to process
-      try {
-        await interaction.deferReply();
-        console.log('Reply deferred successfully');
-      } catch (deferError) {
-        console.error('Error deferring reply:', deferError);
+      if (messages.size === 0) {
+        await interaction.editReply('No messages found to summarize.');
         return;
       }
-      
-      try {
-        // Load message history
-        console.log(`Loading history for channel ${interaction.channelId}`);
-        const fullHistory = loadFullHistory(interaction.channelId);
-        console.log(`Loaded ${fullHistory.length} messages from history`);
-        
-        if (fullHistory.length === 0) {
-          await interaction.editReply('No message history found for this channel.');
-          return;
-        }
-        
-        // Get the last 15 messages
-        const lastMessages = fullHistory.slice(-15);
-        
-        // Format for AI
-        const messagesToSummarize = lastMessages.map(msg => 
-          `${msg.author}: ${msg.content}`
-        ).join('\n');
-        
-        // Create prompt
-        const summaryPrompt = [
-          `Please summarize the following conversation from a Discord channel:
-          
-          ${messagesToSummarize}
-          
-          Provide a concise summary of the main points.`
-        ];
-        
-        console.log('Requesting summary from Gemini...');
-        const geminiResult = await askGeminiWithGroundingHistory(summaryPrompt, [], 
-          "You are a helpful summarization assistant. Provide clear, concise summaries of conversations.");
-        
-        // Create and send embed
-        const embed = new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('📝 Conversation Summary')
-          .setDescription(geminiResult.text || 'Error: No summary generated.')
-          .setTimestamp();
-        
-        console.log('Sending summary response...');
-        await interaction.editReply({ embeds: [embed] });
-        console.log('Summary sent successfully');
-        
-      } catch (error) {
-        console.error('Error in summarize command:', error);
-        try {
-          await interaction.editReply('Sorry, I encountered an error while generating the summary.');
-        } catch (replyError) {
-          console.error('Error sending error reply:', replyError);
-        }
+
+      // Convert messages to text format for summarization
+      const messageTexts = messages
+        .filter(msg => !msg.author.bot) // Exclude bot messages
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp) // Sort chronologically
+        .map(msg => `${msg.author.displayName}: ${msg.content}`)
+        .slice(-messageCount); // Take the most recent ones
+
+      if (messageTexts.length === 0) {
+        await interaction.editReply('No non-bot messages found to summarize.');
+        return;
       }
-      break;
-      
-    default:
-      console.log(`Unknown command received: ${interaction.commandName}`);
+
+      const conversationText = messageTexts.join('\n');
+      const summarizePrompt = `Please provide a concise summary of the following Discord conversation. Focus on the main topics discussed, key points, and any decisions or conclusions reached:\n\n${conversationText}`;
+
+      // Use Gemini to generate the summary
+      const result = await askGeminiWithGroundingHistory([summarizePrompt], [], 
+        "You are a helpful Discord bot that creates clear, concise summaries of conversations. Summarize the main topics and key points discussed."
+      );
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`📝 Channel Summary (${messageTexts.length} messages)`)
+        .setDescription(result.text || 'Unable to generate summary.')
+        .addFields(
+          { name: 'Messages Analyzed', value: messageTexts.length.toString(), inline: true },
+          { name: 'Time Range', value: `Last ${messageCount} messages`, inline: true }
+        )
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [embed] });
+      console.log('[REPLY SUCCESS] Summary generated and sent successfully.');
+
+    } catch (error) {
+      console.error('[REPLY FAIL] Error in summarize command:', error);
       try {
-        await interaction.reply({ content: 'Unknown command', ephemeral: true });
+        await interaction.editReply('Sorry, I encountered an error while generating the summary.');
       } catch (replyError) {
-        console.error('Error replying to unknown command:', replyError);
+        console.error('[REPLY FAIL] Error sending error reply for summarize:', replyError);
       }
+    }
+  } else {
+    console.log(`[COMMAND NO MATCH] Received command "${commandName}" but no handler found.`);
   }
 });
 
 // Chat history file storage
 const CHAT_HISTORY_DIR = path.join(process.cwd(), 'chat_history');
-const FULL_HISTORY_DIR = path.join(process.cwd(), 'full_history');
 const MAX_HISTORY = 1000;
-const MAX_FULL_HISTORY = 5000; // Store more messages in the full history
 
-// Ensure chat_history and full_history directories exist
+// Ensure chat_history directory exists
 if (!fs.existsSync(CHAT_HISTORY_DIR)) {
   fs.mkdirSync(CHAT_HISTORY_DIR);
-}
-if (!fs.existsSync(FULL_HISTORY_DIR)) {
-  fs.mkdirSync(FULL_HISTORY_DIR);
 }
 
 function getChatHistoryPath(channelId) {
   return path.join(CHAT_HISTORY_DIR, `chat_history_${channelId}.json`);
-}
-
-function getFullHistoryPath(channelId) {
-  return path.join(FULL_HISTORY_DIR, `full_history_${channelId}.json`);
 }
 
 function loadChatHistory(channelId) {
@@ -442,20 +304,6 @@ function loadChatHistory(channelId) {
   return [];
 }
 
-function loadFullHistory(channelId) {
-  const filePath = getFullHistoryPath(channelId);
-  if (fs.existsSync(filePath)) {
-    try {
-      const data = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(data);
-    } catch (err) {
-      console.error('Failed to load full history:', err);
-      return [];
-    }
-  }
-  return [];
-}
-
 function saveChatHistory(channelId, history) {
   const filePath = getChatHistoryPath(channelId);
   try {
@@ -465,82 +313,7 @@ function saveChatHistory(channelId, history) {
   }
 }
 
-function saveFullHistory(channelId, history) {
-  const filePath = getFullHistoryPath(channelId);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(history, null, 2), 'utf8');
-  } catch (err) {
-    console.error('Failed to save full history:', err);
-  }
-}
-
 client.on('messageCreate', async (message) => {
-  // Log all messages to full history (except bot messages)
-  if (!message.author.bot) {
-    let fullHistory = loadFullHistory(message.channel.id);
-    fullHistory.push({
-      content: message.content,
-      author: message.author.tag,
-      timestamp: new Date().toISOString(),
-      attachments: message.attachments.size > 0 ? [...message.attachments.values()].map(a => a.url) : []
-    });
-    
-    // Trim if exceeds max size
-    if (fullHistory.length > MAX_FULL_HISTORY) {
-      fullHistory = fullHistory.slice(-MAX_FULL_HISTORY);
-    }
-    
-    saveFullHistory(message.channel.id, fullHistory);
-  }
-
-  // Check for !summarize command as fallback for slash command
-  if (!message.author.bot && message.content.toLowerCase() === '!summarize') {
-    try {
-      await message.channel.sendTyping();
-      
-      const fullHistory = loadFullHistory(message.channel.id);
-      
-      if (fullHistory.length === 0) {
-        await message.reply('No message history found for this channel.');
-        return;
-      }
-      
-      // Get the last 15 messages or fewer if not enough history
-      const lastMessages = fullHistory.slice(-15);
-      
-      // Format messages for the AI
-      const messagesToSummarize = lastMessages.map(msg => 
-        `${msg.author}: ${msg.content}`
-      ).join('\n');
-      
-      // Create a summary prompt
-      const summaryPrompt = [
-        `Please summarize the following conversation from a Discord channel. Focus on the main topics and key points:
-        
-        ${messagesToSummarize}
-        
-        Provide a concise summary that captures the main points of the conversation.`
-      ];
-      
-      // Get summary from Gemini
-      const geminiResult = await askGeminiWithGroundingHistory(summaryPrompt, [], 
-        "You are a helpful summarization assistant. Provide clear, concise summaries of conversations.");
-      
-      // Create and send embed with summary
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('📝 Conversation Summary')
-        .setDescription(geminiResult.text || 'Error: No summary generated.')
-        .setTimestamp();
-      
-      await message.reply({ embeds: [embed] });
-      
-    } catch (error) {
-      console.error('Error generating summary:', error);
-      await message.reply('Sorry, I encountered an error while generating the summary.');
-    }
-    return;
-  }
 
   // Utility to download an image from a URL as a Buffer
   async function downloadImageToBuffer(url) {
