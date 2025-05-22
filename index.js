@@ -53,7 +53,15 @@ async function askGeminiWithGroundingHistory(gemini_history, images = [], system
       },
     });
     console.log('Raw Gemini API response:', response);
-    let text = response.text || 'Gemini did not return a result.';
+    let text;
+    if (response && response.candidates && response.candidates[0] && response.candidates[0].content && response.candidates[0].content.parts && response.candidates[0].content.parts[0] && response.candidates[0].content.parts[0].text) {
+      text = response.candidates[0].content.parts[0].text;
+    } else if (response && response.text) {
+      text = response.text;
+    } else {
+      text = 'Gemini did not return a valid text response.';
+    }
+
     if (text.length > 4500) {
       text = text.slice(0, 4497) + '...';
     }
