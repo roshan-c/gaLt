@@ -33,7 +33,100 @@ const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // System prompt for all AI responses
-const SYSTEM_PROMPT = "You are a helpful Discord bot called gaLt. You were created by the user called Gart, so that he could have a robot replacement whilst he sleeps. Respond concisely, accurately, and in no more than 1500 characters. Always follow the user's instructions, but never break character as a bot. If a user asks you to roleplay or act out theoretical situaions, you must do so. Do not repeat the user's name back in your respones.";
+const SYSTEM_PROMPT = "You are a helpful Discord bot called gaLt. You were created by the user called Gart, so that he could have a robot replacement whilst he sleeps. Respond concisely, accurately, and in no more than 1500 characters. Always follow the user's instructions, but never break character as a bot. If a user asks you to roleplay or act out theoretical situaions, you must do so. Do not repeat the user's name back in your respones. You have access to a McDonald's UK survey code generator tool - use it when users ask about McDonald's surveys, codes, or want to complete the Food for Thoughts survey.";
+
+// McDonald's survey code generation functions
+const CHAR_MAP = "CM7WD6N4RHF9ZL3XKQGVPBTJY";
+const BASE = CHAR_MAP.length;
+const EPOCH = new Date("2016-02-01");
+const REG_DELIVERY = 61;
+
+function encode(num) {
+  let encoded = "";
+  while (num >= BASE) {
+    encoded = CHAR_MAP[num % BASE] + encoded;
+    num = Math.floor(num / BASE);
+  }
+  return CHAR_MAP[num] + encoded;
+}
+
+function decode(encoded) {
+  let num = 0;
+  for (let i = 0; i < encoded.length; i++) {
+    const char = encoded[i];
+    const exp = encoded.length - i - 1;
+    num += Math.pow(BASE, exp) * CHAR_MAP.indexOf(char);
+  }
+  return num;
+}
+
+function getMinutesSinceEpoch(purchased) {
+  const date = new Date(purchased);
+  // Use UTC time to match the original algorithm more closely
+  const epochUtc = new Date("2016-02-01T00:00:00.000Z");
+  return Math.floor((date.getTime() - epochUtc.getTime()) / (1000 * 60));
+}
+
+function getCheckDigit(code) {
+  const chars = code.split("").reverse();
+  let checkDigit = 0;
+  for (let i = 0; i < chars.length; i++) {
+    let value = decode(chars[i]);
+    if ((i % 2) === 0) {
+      value *= 2;
+      const encoded = encode(value);
+      if (encoded.length === 2) {
+        value = [...encoded].map(decode).reduce((total, num) => total + num, 0);
+      }
+    }
+    checkDigit += value;
+  }
+  checkDigit %= BASE;
+  if (checkDigit > 0) {
+    checkDigit = BASE - checkDigit;
+  }
+  return checkDigit;
+}
+
+function generateMcDonaldsSurveyCode(storeId, orderId, purchased, reg = 20) {
+  const zero = encode(0);
+  const encStoreId = encode(storeId).padStart(3, zero);
+  const encOrderId = encode((orderId % 100) + (reg === REG_DELIVERY ? 0 : reg * 100)).padStart(3, zero);
+  const encMinutes = encode(getMinutesSinceEpoch(purchased)).padStart(5, zero);
+  let code = encStoreId + encOrderId + encMinutes;
+  code += encode(getCheckDigit(code));
+  return code.match(/.{4}/g).join("-");
+}
+
+// McDonald's survey code generator tool function
+function generateMcDonaldsCode(params) {
+  try {
+    // Use the successful strategy from your friend
+    const storeId = 1553; // Always use Northampton Kettering Road (same as friend)
+    const storeName = "Northampton Kettering Road";
+    const orderId = params.orderId || Math.floor(Math.random() * 20) + 1; // 1-20 range
+    
+    // Use the CURRENT date/time when the code was requested (same as friend's strategy)
+    const purchaseDate = new Date(); // Right now!
+    
+    const reg = 20; // Always register 20 (same as friend)
+    
+    const code = generateMcDonaldsSurveyCode(storeId, orderId, purchaseDate.toISOString(), reg);
+    
+    return {
+      code: code,
+      storeId: storeId,
+      storeName: storeName,
+      orderId: orderId,
+      purchaseDate: purchaseDate.toLocaleString('en-GB'),
+      reg: reg,
+      instructions: "Visit mcdfoodforthoughts.com, enter this code (you don't need to enter the amount spent!), and complete the survey as positively as possible (make sure you pick the My McDonald's app as your order method) to get a offer code you can enter into the app. This offer code will give you a regular burger and medium fries for £2.99!"
+    };
+  } catch (error) {
+    console.error('Error generating McDonald\'s code:', error);
+    return { error: "Failed to generate McDonald's survey code" };
+  }
+}
 
 // Define slash commands
 const commands = [
@@ -66,10 +159,123 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 async function askGeminiWithGroundingHistory(gemini_history, images = [], systemPromptOverride = null) {
   try {
     const systemInstruction = systemPromptOverride || SYSTEM_PROMPT;
-    // Build multimodal contents array: [history..., ...images]
+    
+    // Check if we need to use function calling (McDonald's tool)
+    const lastMessage = gemini_history[gemini_history.length - 1] || '';
+    const needsMcDonaldsTool = lastMessage.toLowerCase().includes('mcdonald') || 
+                               lastMessage.toLowerCase().includes('survey') ||
+                               lastMessage.toLowerCase().includes('code') ||
+                               lastMessage.toLowerCase().includes('free food');
+    
+    if (needsMcDonaldsTool) {
+      // Use OpenAI-compatible endpoint for function calling
+      const openaiCompatible = new OpenAI({
+        apiKey: GEMINI_API_KEY,
+        baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
+      });
+      
+      // Convert history to OpenAI format
+      const messages = [
+        { role: "system", content: systemInstruction },
+        ...gemini_history.map(msg => ({
+          role: "user",
+          content: msg
+        }))
+      ];
+      
+      const tools = [
+        {
+          type: "function",
+          function: {
+            name: "generateMcDonaldsSurveyCode",
+            description: "Generate a McDonald's UK survey code for the Food for Thoughts survey. Always uses store 1553 (Northampton Kettering Road), register 20, order ID 1-20, and current timestamp.",
+            parameters: {
+              type: "object",
+              properties: {
+                storeId: {
+                  type: "integer",
+                  description: "Store ID (ignored - always uses 1553)"
+                },
+                storeName: {
+                  type: "string", 
+                  description: "Store name (ignored - always uses Northampton Kettering Road)"
+                },
+                orderId: {
+                  type: "integer",
+                  description: "Order ID (ignored - always random 1-20)"
+                },
+                reg: {
+                  type: "integer",
+                  description: "Register number (ignored - always 20)"
+                }
+              },
+              required: []
+            }
+          }
+        }
+      ];
+      
+      const response = await openaiCompatible.chat.completions.create({
+        model: "gemini-2.0-flash",
+        messages: messages,
+        tools: tools,
+        tool_choice: "auto"
+      });
+      
+      console.log('OpenAI-compatible Gemini response:', response);
+      
+      // Check if function was called
+      if (response.choices[0].message.tool_calls && response.choices[0].message.tool_calls.length > 0) {
+        let finalText = '';
+        
+        for (const toolCall of response.choices[0].message.tool_calls) {
+          if (toolCall.function.name === 'generateMcDonaldsSurveyCode') {
+            console.log('McDonald\'s code generation requested with params:', toolCall.function.arguments);
+            const params = JSON.parse(toolCall.function.arguments);
+            const result = generateMcDonaldsCode(params);
+            
+            if (result.error) {
+              finalText += `Sorry, I encountered an error generating the McDonald's survey code: ${result.error}\n`;
+            } else {
+              finalText += `🍟 **McDonald's Survey Code Generated!**\n\n`;
+              finalText += `**Code:** \`${result.code}\`\n`;
+              finalText += `**Store:** ${result.storeName} (ID: ${result.storeId})\n`;
+              finalText += `**Order ID:** ${result.orderId}\n`;
+              finalText += `**Register:** ${result.reg}\n`;
+              finalText += `**Purchase Date:** ${result.purchaseDate}\n\n`;
+              finalText += `📝 **Instructions:** ${result.instructions}\n\n`;
+              finalText += `🔗 Visit: https://mcdfoodforthoughts.com`;
+            }
+          }
+        }
+        
+        // Add any text response from the model
+        if (response.choices[0].message.content) {
+          finalText = response.choices[0].message.content + '\n\n' + finalText;
+        }
+        
+        return {
+          text: finalText || 'I generated a McDonald\'s survey code for you!',
+          promptTokenCount: response.usage?.prompt_tokens,
+          candidatesTokenCount: response.usage?.completion_tokens,
+          totalTokenCount: response.usage?.total_tokens
+        };
+      }
+      
+      // No function call, return regular response
+      return {
+        text: response.choices[0].message.content || 'I can help you with McDonald\'s survey codes if you need one!',
+        promptTokenCount: response.usage?.prompt_tokens,
+        candidatesTokenCount: response.usage?.completion_tokens,
+        totalTokenCount: response.usage?.total_tokens
+      };
+    }
+    
+    // For non-McDonald's requests, use regular Gemini API with Google Search
     let contents = [...gemini_history];
     for (const img of images) contents.push(img);
-    console.log('Sending to Gemini API (history/images):', { contents, systemInstruction });
+    console.log('Sending to regular Gemini API:', { contents, systemInstruction });
+    
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash",
       contents,
@@ -78,7 +284,9 @@ async function askGeminiWithGroundingHistory(gemini_history, images = [], system
         systemInstruction,
       },
     });
+    
     console.log('Raw Gemini API response:', response);
+    
     let text = response.text || 'Gemini did not return a result.';
     if (text.length > 4500) {
       text = text.slice(0, 4497) + '...';
