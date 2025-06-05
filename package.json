@@ -1,10 +1,12 @@
 {
   "name": "discord-gemini-bot",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "start": "bun index.js"
+    "build": "bun tsc --project tsconfig.json",
+    "start": "bun run build && bun dist/index.js",
+    "dev": "bun --watch src/index.ts"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
@@ -15,5 +17,13 @@
     "openai": "^4.28.0",
     "pg": "^8.16.0",
     "play-dl": "^1.9.7"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^8.2.3",
+    "@types/node": "^22.15.29",
+    "@types/node-fetch": "^2.6.12",
+    "@types/pg": "^8.15.4",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.3"
   }
 }
