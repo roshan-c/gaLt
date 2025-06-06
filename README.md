@@ -27,6 +27,12 @@ A Discord bot powered by Google's Gemini AI with intelligent tool calling, conve
 - Conversation summarization with configurable message count
 - Smart context retention across conversations
 
+### 🧵 **Threaded Replies**
+- **Optional Startup Flag**: `--reply-in-thread`
+- When enabled, the bot will reply to messages by creating a new thread instead of replying directly in the channel.
+- Thread names are automatically generated from the first 30 characters of the user's message (or "Discussion" if the message is short).
+- **Example**: `bun index.js --reply-in-thread`
+
 ## Setup
 
 1. **Clone and Install**:

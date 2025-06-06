@@ -9,6 +9,10 @@ import path from 'path';
 // Load environment variables
 dotenv.config();
 
+// Parse command-line arguments
+const shouldReplyInThread = process.argv.includes('--reply-in-thread');
+console.log(`Reply in thread mode: ${shouldReplyInThread ? 'enabled' : 'disabled'}`);
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -620,8 +624,17 @@ client.on('messageCreate', async (message) => {
         { name: 'Output Token Count', value: outputTokenCount.toString(), inline: true }
       )
       .setTimestamp();
-    await message.reply({ embeds: [embed] });
-    console.log('Replied to Discord successfully.');
+
+    if (shouldReplyInThread) {
+      let threadName = message.content.substring(0, 30).trim();
+      if (!threadName) threadName = "Discussion";
+      const thread = await message.startThread({ name: threadName, autoArchiveDuration: 60 });
+      await thread.send({ embeds: [embed] });
+      console.log('Replied in new thread successfully.');
+    } else {
+      await message.reply({ embeds: [embed] });
+      console.log('Replied to Discord successfully.');
+    }
   } catch (err) {
     console.error('Failed to reply to Discord:', err);
   }
