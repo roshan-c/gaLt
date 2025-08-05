@@ -1,130 +1,239 @@
-# gaLt - Discord AI Assistant Bot
+# GaLt - Advanced Discord Bot with LangChain & RAG
 
-A Discord bot powered by Google's Gemini AI with intelligent tool calling, conversation memory, and specialized features including McDonald's UK survey code generation.
+An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and OpenAI integration. Features persistent memory using RAG (Retrieval-Augmented Generation) and an extensible tool system for easy customization and expansion.
 
-## Features
+## 🌟 Features
 
-### 🤖 **AI-Powered Responses**
-- Uses Google's Gemini 2.0 Flash model for intelligent conversations
-- Automatic tool detection and function calling
-- Maintains chat history for contextual responses
-- Can process and analyze images shared in Discord
-- Google Search integration for real-time information
+- **AI-Powered Conversations**: Uses OpenAI models via LangChain for intelligent responses
+- **Persistent Memory**: RAG system maintains conversation context across sessions
+- **Tool System**: Extensible framework for adding custom functionality
+- **Mention-Based Interaction**: Bot responds when mentioned in channels
+- **TypeScript**: Full type safety and modern development experience
+- **Bun Runtime**: Fast JavaScript runtime with built-in package management
 
-### 🍟 **McDonald's Survey Code Generator**
-- Generates valid McDonald's UK "Food for Thoughts" survey codes
-- Automatically triggered when users mention McDonald's, surveys, or codes
-- Uses proven strategy: Store 1553 (Northampton Kettering Road), Register 20, Order ID 1-20
-- Provides complete instructions for using codes at mcdfoodforthoughts.com
+## 🚀 Quick Start
 
-### 🎨 **Image Generation**
-- Uses OpenAI's GPT-Image-1 model for high-quality image generation
-- Available via `/generateimage` slash command
-- Supports 1024x1024 resolution images
+### Prerequisites
 
-### 📝 **Conversation Management**
-- Per-channel chat history storage (up to 1000 messages)
-- Conversation summarization with configurable message count
-- Smart context retention across conversations
+- [Bun](https://bun.sh) (v1.2.19 or later)
+- Node.js (v18 or later) - optional, Bun is preferred
+- Discord Bot Token
+- OpenAI API Key
 
-## Setup
+### Installation
 
-1. **Clone and Install**:
+1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/gaLt.git
+   git clone <your-repo-url>
    cd gaLt
+   ```
+
+2. **Install dependencies**
+   ```bash
    bun install
    ```
 
-2. **Environment Configuration**:
-   Create a `.env` file with your API keys:
+3. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env` and add your credentials:
    ```env
    DISCORD_TOKEN=your_discord_bot_token_here
-   GEMINI_API_KEY=your_gemini_api_key_here
    OPENAI_API_KEY=your_openai_api_key_here
-   GUILD_ID=your_discord_server_id_here
+   OPENAI_MODEL=gpt-4o-mini
    ```
 
-3. **Run the Bot**:
+4. **Run the bot**
+   
+   Development mode (with hot reload):
    ```bash
-   bun run index.js
+   bun run dev
+   ```
+   
+   Production mode:
+   ```bash
+   bun run start
    ```
 
-## Commands
+## 🎯 Usage
 
-### Slash Commands
-- **/hello**: Test command - replies with "Hello there!"
-- **/generateimage [prompt]**: Generate an image using OpenAI's GPT-Image-1
-  - **Required**: `prompt` (string) - Description of the image you want
-- **/summarize [count]**: Summarize recent channel messages
-  - **Optional**: `count` (5-50) - Number of messages to summarize (default: 15)
+1. **Invite the bot to your Discord server** with message reading permissions
+2. **Mention the bot** in any channel: `@YourBot hello there!`
+3. **The bot will respond** using AI and maintain conversation context
+4. **Use built-in tools** by asking natural questions like:
+   - "Calculate 15 + 25"
+   - "What time is it in Tokyo?"
+   - "Tell me a random science fact"
 
-### Chat Commands
-- **@gaLt [message]**: Mention the bot for AI-powered responses with full context
-- **McDonald's keywords**: Say "McDonald's", "survey", "code", or "free food" to automatically generate survey codes
-
-## Channel Configuration
-
-The bot is currently configured to respond to mentions only in channel ID: `1368705925808132136`. 
-
-To change this, modify line 534 in `index.js`:
-```javascript
-if (message.channel.id !== 'YOUR_CHANNEL_ID_HERE') {
-```
-
-## McDonald's Survey Code Feature
-
-When users mention McDonald's-related keywords, the bot automatically:
-1. Generates a valid UK survey code using store 1553 (Northampton Kettering Road)
-2. Provides the generated code in format: `XXXX-XXXX-XXXX`
-3. Includes store details, order info, and timestamp
-4. Gives complete instructions for using the code at mcdfoodforthoughts.com
-
-**Code Strategy** (proven 100% success rate):
-- Store: Always 1553 (Northampton Kettering Road)
-- Register: Always 20
-- Order ID: Random 1-20
-- Timestamp: Current time when requested
-
-## API Requirements
-
-- **Discord Bot Token**: Create at [Discord Developer Portal](https://discord.com/developers/applications)
-- **Google Gemini API Key**: Get from [Google AI Studio](https://ai.google.dev/)
-- **OpenAI API Key**: Get from [OpenAI Platform](https://platform.openai.com/)
-
-## Bot Permissions
-
-Required Discord permissions:
-- View Channels
-- Send Messages
-- Read Message History
-- Use Slash Commands
-- Embed Links
-- Attach Files
-
-Required OAuth2 Scopes:
-- `bot`
-- `applications.commands`
-
-## Technical Details
-
-- **Bun**: Latest version required (faster than Node.js)
-- **Dependencies**: discord.js, @google/genai, openai, node-fetch, dotenv
-- **Storage**: File-based chat history (`chat_history/` directory)
-- **Function Calling**: Uses OpenAI-compatible Gemini endpoint for tool integration
-
-## File Structure
+## 🔧 Project Structure
 
 ```
 gaLt/
-├── index.js              # Main bot file
-├── package.json          # Dependencies
-├── .env                  # Environment variables (create this)
-├── chat_history/         # Per-channel chat logs (auto-created)
-├── test_*.js            # Test files for McDonald's generator
-└── README.md            # This file
+├── src/
+│   ├── memory/
+│   │   └── MemoryManager.ts      # RAG conversation memory
+│   ├── tools/
+│   │   ├── ToolRegistry.ts       # Tool management system
+│   │   └── examples/
+│   │       ├── ExampleTool.ts    # Calculator & time tools
+│   │       └── WeatherTool.ts    # Weather & facts tools
+│   └── types/
+│       └── BotConfig.ts          # TypeScript interfaces
+├── index.ts                      # Main bot entry point
+├── package.json                  # Dependencies & scripts
+├── tsconfig.json                 # TypeScript configuration
+└── .env.example                  # Environment template
 ```
 
----
+## 🛠️ Creating Custom Tools
 
-**Created by Gart** - A helpful Discord bot that sleeps when you do! 🤖
+Tools are the bot's way of performing actions beyond conversation. Here's how to create one:
+
+```typescript
+import { z } from 'zod';
+import type { BotTool } from '../ToolRegistry';
+
+export const myCustomTool: BotTool = {
+  name: 'my_custom_tool',
+  description: 'Description of what this tool does',
+  schema: z.object({
+    parameter: z.string().describe('Parameter description'),
+  }),
+  execute: async (args: { parameter: string }) => {
+    // Your tool logic here
+    return { result: 'Tool output' };
+  },
+};
+```
+
+Then register it in `index.ts`:
+```typescript
+import { myCustomTool } from './src/tools/examples/MyCustomTool';
+toolRegistry.registerTool(myCustomTool);
+```
+
+## 📚 Built-in Tools
+
+### Calculator Tool
+- **Name**: `calculator`
+- **Description**: Performs basic arithmetic operations
+- **Usage**: "Calculate 42 * 7" or "What's 100 divided by 4?"
+
+### Time Tool
+- **Name**: `get_time`
+- **Description**: Gets current time in various formats and timezones
+- **Usage**: "What time is it?" or "Show me the time in Tokyo"
+
+### Weather Tool (Mock)
+- **Name**: `get_weather`
+- **Description**: Returns weather information (mock data)
+- **Usage**: "What's the weather in New York?"
+
+### Random Facts Tool
+- **Name**: `random_fact`
+- **Description**: Generates random interesting facts by category
+- **Usage**: "Tell me a science fact" or "Random fact about history"
+
+## 🧠 Memory System (RAG)
+
+The bot maintains conversation context using a simple but effective RAG system:
+
+- **Persistent Memory**: Conversations are stored per user/channel combination
+- **Context Limit**: Keeps the last 50 messages to prevent memory overflow
+- **Automatic Management**: Old messages are automatically pruned
+- **Future-Ready**: Architecture supports vector embeddings and advanced retrieval
+
+## 🔄 Available Scripts
+
+```bash
+# Development with hot reload
+bun run dev
+
+# Production start
+bun run start
+
+# Build for distribution
+bun run build
+
+# Run tests
+bun run test
+```
+
+## 🔐 Environment Variables
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `DISCORD_TOKEN` | Your Discord bot token | ✅ | - |
+| `OPENAI_API_KEY` | Your OpenAI API key | ✅ | - |
+| `OPENAI_MODEL` | OpenAI model to use | ❌ | `gpt-4o-mini` |
+| `LANGSMITH_API_KEY` | LangSmith tracing key | ❌ | - |
+| `LANGSMITH_TRACING` | Enable LangSmith tracing | ❌ | `false` |
+
+## 🚀 Deployment
+
+### Local Development
+The bot runs locally and connects to Discord. Perfect for development and testing.
+
+### Production Deployment
+For production deployment, consider:
+
+1. **Process Managers**: PM2, systemd, or Docker
+2. **Environment**: Ensure all environment variables are set
+3. **Monitoring**: Use LangSmith for AI model monitoring
+4. **Scaling**: Consider horizontal scaling for high-traffic servers
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit changes: `git commit -m 'Add amazing feature'`
+4. Push to branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
+
+## 📝 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+**Bot doesn't respond to mentions**
+- Check that the bot has permission to read messages
+- Verify the `MESSAGE_CONTENT` intent is enabled
+- Ensure the bot token is correct
+
+**OpenAI API errors**
+- Verify your API key is valid and has credits
+- Check the model name is supported
+- Monitor rate limits
+
+**TypeScript compilation errors**
+- Run `bun install` to ensure all dependencies are installed
+- Check that your TypeScript version matches requirements
+
+### Getting Help
+
+- Create an issue on GitHub
+- Check the Discord.js documentation
+- Review LangChain.js documentation
+- Consult OpenAI API documentation
+
+## 🏗️ Architecture Overview
+
+```mermaid
+graph TD
+    A[Discord Message] --> B[Bot Event Handler]
+    B --> C[Clean & Validate Input]
+    C --> D[Memory Manager]
+    D --> E[LangChain + OpenAI]
+    E --> F[Tool Registry]
+    F --> G[Execute Tools]
+    G --> H[Final Response]
+    H --> I[Update Memory]
+    I --> J[Send to Discord]
+```
+
+Built with ❤️ using Bun, TypeScript, Discord.js, and LangChain.
