@@ -12,6 +12,7 @@ start-chroma.sh
 test-*
 /hide
 /RAGdoll
+CLAUDE.md
 # output
 out
 dist
