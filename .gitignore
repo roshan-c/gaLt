@@ -1,6 +1,17 @@
 # dependencies (bun install)
 node_modules
 
+# test files
+test-files/
+test-embeds.js
+test-embed-tools.js
+/.claude
+/.cursor
+/.vscode
+start-chroma.sh
+test-*
+/hide
+/RAGdoll
 # output
 out
 dist
