@@ -33,7 +33,7 @@ export class MemoryManager {
   private async initializeCollection(): Promise<void> {
     try {
       // Use null embedding function to avoid local model issues
-      // This means we'll need to provide embeddings manually
+      // Embeddings will be generated and supplied by the application code (using OpenAI), not by ChromaDB's internal embedding function
       this.collection = await this.chromaClient.getOrCreateCollection({
         name: 'discord_conversations',
         embeddingFunction: null
