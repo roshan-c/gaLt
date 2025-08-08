@@ -8,6 +8,7 @@ test-embed-tools.js
 /.claude
 /.cursor
 /.vscode
+imagegen.js
 start-chroma.sh
 test-*
 /hide

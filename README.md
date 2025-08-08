@@ -2,6 +2,32 @@
 
 An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and OpenAI integration. Features persistent memory using RAG (Retrieval-Augmented Generation) and an extensible tool system for easy customization and expansion.
 
+## Table of Contents
+- [Features](#features)
+- [Quick Start](#quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Creating Custom Tools](#creating-custom-tools)
+- [Built-in Tools](#built-in-tools)
+  - [Calculator Tool](#calculator-tool)
+  - [Time Tool](#time-tool)
+  - [Weather Tool (Mock)](#weather-tool-mock)
+  - [Random Facts Tool](#random-facts-tool)
+- [Memory System (RAG)](#memory-system-rag)
+- [Available Scripts](#available-scripts)
+- [Environment Variables](#environment-variables)
+- [Deployment](#deployment)
+  - [Local Development](#local-development)
+  - [Production Deployment](#production-deployment)
+- [Contributing](#contributing)
+- [License](#license)
+- [Troubleshooting](#troubleshooting)
+  - [Common Issues](#common-issues)
+  - [Getting Help](#getting-help)
+- [Architecture Overview](#architecture-overview)
+
 ## 🌟 Features
 
 - **AI-Powered Conversations**: Uses OpenAI models via LangChain for intelligent responses
@@ -10,6 +36,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 - **Mention-Based Interaction**: Bot responds when mentioned in channels
 - **TypeScript**: Full type safety and modern development experience
 - **Bun Runtime**: Fast JavaScript runtime with built-in package management
+- **Image Generation**: Generate images via GPT-Image-1 with a clean, single-embed response
 
 ## 🚀 Quick Start
 
@@ -24,7 +51,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/roshan-c/gaLt.git
    cd gaLt
    ```
 
@@ -38,12 +65,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
    cp .env.example .env
    ```
    
-   Edit `.env` and add your credentials:
-   ```env
-   DISCORD_TOKEN=your_discord_bot_token_here
-   OPENAI_API_KEY=your_openai_api_key_here
-   OPENAI_MODEL=gpt-4o-mini
-   ```
+   Edit `.env` and add your credentials. See more here: [Environment Variables](#environment-variables)
 
 4. **Run the bot**
    
@@ -66,6 +88,18 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
    - "Calculate 15 + 25"
    - "What time is it in Tokyo?"
    - "Tell me a random science fact"
+   - "Generate an image of a red dragon flying over mountains at sunset"
+
+### Image generation behavior
+- The bot uses `gpt-image-1` under the hood for image creation.
+- One image is generated per user message (duplicate image tool calls are ignored).
+- Output is enforced to `1024x1024` with `quality: low` to control cost.
+- The reply is a single embed containing:
+  - Title
+  - Prompt as a header field
+  - The image itself
+  - A short line: "Here is your image"
+- No download link is included. Ensure the bot has the "Attach Files" permission in the channel.
 
 ## 🔧 Project Structure
 
@@ -76,6 +110,7 @@ gaLt/
 │   │   └── MemoryManager.ts      # RAG conversation memory
 │   ├── tools/
 │   │   ├── ToolRegistry.ts       # Tool management system
+│   │   ├── ImageGenerationTool.ts # GPT-Image-1 image generation tool
 │   │   └── examples/
 │   │       ├── ExampleTool.ts    # Calculator & time tools
 │   │       └── WeatherTool.ts    # Weather & facts tools
@@ -167,7 +202,8 @@ bun run test
 |----------|-------------|----------|---------|
 | `DISCORD_TOKEN` | Your Discord bot token | ✅ | - |
 | `OPENAI_API_KEY` | Your OpenAI API key | ✅ | - |
-| `OPENAI_MODEL` | OpenAI model to use | ❌ | `gpt-4o-mini` |
+| `OPENAI_MODEL` | Chat model to use (e.g., `gpt-5-mini`, `gpt-4o-mini`, `gpt-4.1`) | ✅ | `gpt-5-mini` |
+| `CHROMA_URL` | ChromaDB URL for RAG memory | ❌ | `http://localhost:8000` |
 | `LANGSMITH_API_KEY` | LangSmith tracing key | ❌ | - |
 | `LANGSMITH_TRACING` | Enable LangSmith tracing | ❌ | `false` |
 
@@ -209,6 +245,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Verify your API key is valid and has credits
 - Check the model name is supported
 - Monitor rate limits
+
+**Multiple responses to a single message**
+- Make sure only one bot process is running.
+- Hot-reload can add duplicate listeners; this project includes a singleton client and listener guards, plus message ID deduplication.
+- If running multiple replicas, add an external deduplication layer (e.g., cache by message ID).
 
 **TypeScript compilation errors**
 - Run `bun install` to ensure all dependencies are installed

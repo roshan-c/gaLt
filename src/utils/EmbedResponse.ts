@@ -1,4 +1,4 @@
-import { EmbedBuilder, Message } from 'discord.js';
+import { EmbedBuilder, Message, AttachmentBuilder } from 'discord.js';
 
 export interface EmbedChunk {
   title?: string;
@@ -27,8 +27,51 @@ export class EmbedResponse {
       includeContext?: boolean;
       toolsUsed?: string[];
       tokenUsage?: TokenUsage;
+      attachments?: AttachmentBuilder[];
+      imagePrompt?: string;
+      imageFilename?: string;
     }
   ): Promise<void> {
+    // Special layout for image messages
+    if (options?.attachments && options.attachments.length > 0 && options?.imagePrompt) {
+      const embed = new EmbedBuilder().setColor(options?.color || this.DEFAULT_COLOR);
+
+      if (options?.title) {
+        embed.setTitle(options.title);
+      }
+
+      // Prompt as header (field)
+      embed.addFields({ name: 'Prompt', value: options.imagePrompt });
+
+      // Attach the image inside the embed
+      const firstAttachment: any = options.attachments[0] as any;
+      const fileName: string | undefined = options.imageFilename || firstAttachment?.name;
+      if (fileName) {
+        embed.setImage(`attachment://${fileName}`);
+      }
+
+      // Simple description under the image
+      embed.setDescription('Here is your image');
+
+      try {
+        await message.channel.send({
+          embeds: [embed],
+          files: options.attachments,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+      } catch (error) {
+        console.error('Failed to send image embed response:', error);
+        await message.channel.send({
+          content: 'Here is your image',
+          files: options.attachments,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+      }
+      return;
+    }
+
     const chunks = this.chunkContent(content);
     const embeds: EmbedBuilder[] = [];
 
@@ -83,16 +126,33 @@ export class EmbedResponse {
       embeds.push(embed);
     }
 
-    // Send embeds (Discord allows up to 10 embeds per message)
+    // Send embeds with optional attachments
     try {
-      await message.reply({ embeds });
+      const sendOptions: any = { embeds };
+      if (options?.attachments && options.attachments.length > 0) {
+        sendOptions.files = options.attachments;
+      }
+      // Prefer channel.send with explicit message reference to avoid edge cases in reply()
+      await message.channel.send({
+        ...sendOptions,
+        reply: { messageReference: message.id },
+        allowedMentions: { repliedUser: false },
+      });
     } catch (error) {
       console.error('Failed to send embed response:', error);
       // Fallback to simple text response
       const truncated = content.length > 2000 
         ? content.substring(0, 1997) + '...'
         : content;
-      await message.reply(truncated);
+      try {
+        await message.channel.send({
+          content: truncated,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+      } catch {
+        await message.reply(truncated);
+      }
     }
   }
 

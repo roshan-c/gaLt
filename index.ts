@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
 import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage, AIMessage } from '@langchain/core/messages';
+import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { MemoryManager } from './src/memory/MemoryManager';
 import { ToolRegistry } from './src/tools/ToolRegistry';
@@ -8,12 +8,13 @@ import { EmbedResponse } from './src/utils/EmbedResponse';
 import type { BotConfig, ConversationMessage, ToolResult } from './src/types/BotConfig';
 import { calculatorTool, timeTool } from './src/tools/examples/ExampleTool';
 import { weatherTool, randomFactTool } from './src/tools/examples/WeatherTool';
+import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGenerationTool';
 
 // Load environment variables
 const config: BotConfig = {
   discordToken: process.env.DISCORD_TOKEN!,
   openaiApiKey: process.env.OPENAI_API_KEY!,
-  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  openaiModel: process.env.OPENAI_MODEL!,
 };
 
 // Validate environment variables
@@ -24,14 +25,38 @@ if (!config.openaiApiKey) {
   throw new Error('OPENAI_API_KEY environment variable is required');
 }
 
-// Initialize Discord client
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
+// Initialize Discord client (singleton across hot reloads)
+const g: any = globalThis as any;
+let client: Client = g.__GA_LT_CLIENT as Client;
+if (!client) {
+  client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
+  });
+  g.__GA_LT_CLIENT = client;
+}
+
+// Deduplicate message processing to prevent multiple executions per Discord message
+const processedMessages: Map<string, number> = g.__GA_LT_PROCESSED_MESSAGES || new Map<string, number>();
+g.__GA_LT_PROCESSED_MESSAGES = processedMessages;
+const MESSAGE_DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+function markAndCheckProcessed(messageId: string): boolean {
+  const now = Date.now();
+  // prune occasionally
+  if (processedMessages.size > 1000) {
+    for (const [id, ts] of processedMessages) {
+      if (now - ts > MESSAGE_DEDUP_TTL_MS) processedMessages.delete(id);
+    }
+  }
+  if (processedMessages.has(messageId)) return true;
+  processedMessages.set(messageId, now);
+  // auto-expire entry to avoid unbounded growth
+  setTimeout(() => processedMessages.delete(messageId), MESSAGE_DEDUP_TTL_MS).unref?.();
+  return false;
+}
 
 // Token tracking callback
 class TokenTracker extends BaseCallbackHandler {
@@ -68,7 +93,7 @@ class TokenTracker extends BaseCallbackHandler {
 const llm = new ChatOpenAI({
   openAIApiKey: config.openaiApiKey,
   modelName: config.openaiModel,
-  temperature: 0.7,
+  temperature: 1,
 });
 
 // Initialize memory manager
@@ -80,20 +105,28 @@ toolRegistry.registerTool(calculatorTool);
 toolRegistry.registerTool(timeTool);
 toolRegistry.registerTool(weatherTool);
 toolRegistry.registerTool(randomFactTool);
+toolRegistry.registerTool(imageGenerationTool);
 
 // Bind tools to the LLM
 const llmWithTools = llm.bindTools(toolRegistry.getToolDefinitions());
 
 // Bot ready event
-client.once(Events.ClientReady, (readyClient) => {
-  console.log(`🚀 ${readyClient.user.tag} is online and ready!`);
-  console.log(`📊 Registered ${toolRegistry.getToolCount()} tools`);
-});
+if (!g.__GA_LT_READY_LISTENER) {
+  client.once(Events.ClientReady, (readyClient) => {
+    console.log(`🚀 ${readyClient.user.tag} is online and ready!`);
+    console.log(`📊 Registered ${toolRegistry.getToolCount()} tools`);
+    console.log(`🎨 Image generation available via GPT-Image-1`);
+  });
+  g.__GA_LT_READY_LISTENER = true;
+}
 
 // Message handling
+if (!g.__GA_LT_MESSAGE_LISTENER) {
 client.on(Events.MessageCreate, async (message: Message) => {
   // Ignore messages from bots
   if (message.author.bot) return;
+  // Dedup guard: skip if we've already processed this message ID
+  if (markAndCheckProcessed(message.id)) return;
   
   // Only respond when bot is mentioned
   if (!message.mentions.has(client.user!)) return;
@@ -158,13 +191,82 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const toolsUsed = response.tool_calls.map(toolCall => toolCall.name);
       console.log(`🔧 Tools used: ${toolsUsed.join(', ')}`);
       
-      // Execute tools
-      const toolResults = await toolRegistry.executeTools(response.tool_calls);
+      // Execute tools with single-image policy: only allow the first generate_image per message
+      const toolResults: ToolResult[] = [];
+      let imageToolUsed = false;
+      for (const toolCall of response.tool_calls) {
+        if (toolCall.name === 'generate_image') {
+          if (imageToolUsed) {
+            toolResults.push({
+              success: true,
+              result: {
+                success: false,
+                message: 'Image already generated for this message; ignoring duplicate request.',
+              },
+              message: new ToolMessage({
+                content: 'Image already generated for this message; ignoring duplicate request.',
+                tool_call_id: toolCall.id || '',
+              }),
+            });
+            continue;
+          }
+          imageToolUsed = true;
+        }
+        const [result] = await toolRegistry.executeTools([toolCall]);
+        toolResults.push(result);
+      }
+      
+      // Check for image generation results and create attachments
+      const attachments: any[] = [];
+      let imagePrompt: string | undefined;
+      let imageFilename: string | undefined;
+      let imageAlreadyAttached = false;
+      
+      // We need to directly check the tool calls since ToolRegistry converts results to JSON
+      for (let i = 0; i < response.tool_calls.length; i++) {
+        const toolCall = response.tool_calls[i];
+        const result = toolResults[i];
+        
+        console.log(`🔍 Tool "${toolCall.name}" result:`, {
+          success: result.success,
+          hasResult: !!result.result
+        });
+        
+        // If this was an image generation tool, use the raw result from the first execution
+        if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
+          try {
+            const rawResult: any = result.result;
+            console.log('🔍 Raw image result:', {
+              success: rawResult?.success,
+              hasImageBuffer: !!rawResult?.imageBuffer,
+              bufferSize: rawResult?.imageBuffer?.length
+            });
+
+            if (rawResult?.success && rawResult.imageBuffer) {
+              const attachment = createImageAttachment(rawResult);
+              if (attachment) {
+                attachments.push(attachment);
+                console.log('📎 Created image attachment successfully');
+                imageAlreadyAttached = true;
+              }
+              // Capture prompt and filename for embed formatting
+              if (!imagePrompt) imagePrompt = rawResult.prompt;
+              if (!imageFilename) imageFilename = rawResult.filename;
+            }
+          } catch (error) {
+            console.error('📎 Failed to create image attachment:', error);
+          }
+        }
+      }
+      
+      console.log(`📎 Total attachments: ${attachments.length}`);
       
       // Add tool results to conversation and get final response
       const toolMessages = toolResults.map((result: ToolResult) => result.message);
+      // Limit the amount of prior context to avoid huge token usage on the second call
+      const recentContext = messages.slice(-6);
       const finalResponse = await llmWithTools.invoke([
-        ...messages,
+        ...recentContext,
         response,
         ...toolMessages
       ], { callbacks: [tokenTracker] });
@@ -193,7 +295,10 @@ client.on(Events.MessageCreate, async (message: Message) => {
           title: '🤖 Response',
           includeContext: true,
           toolsUsed: toolsUsed,
-          tokenUsage: tokenUsage
+          tokenUsage: tokenUsage,
+          attachments: attachments,
+          imagePrompt: imagePrompt,
+          imageFilename: imageFilename
         }
       );
     } else {
@@ -235,6 +340,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     );
   }
 });
+g.__GA_LT_MESSAGE_LISTENER = true;
+}
 
 // Error handling
 client.on(Events.Error, (error) => {

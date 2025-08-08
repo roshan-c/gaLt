@@ -81,12 +81,39 @@ export class ToolRegistry {
         
         // Execute the tool
         const result = await tool.execute(validatedArgs);
-        
+
+        // Sanitize tool result for sending back to the LLM (avoid huge/binary payloads)
+        const sanitized = (() => {
+          try {
+            // Special-case common binary fields
+            if (result && typeof result === 'object') {
+              const clone: Record<string, any> = {};
+              for (const [key, value] of Object.entries(result)) {
+                if (key.toLowerCase().includes('buffer')) {
+                  // Replace buffers with a size summary
+                  const size = (value && typeof value === 'object' && 'length' in value)
+                    ? Number((value as any).length) : undefined;
+                  clone[key] = size != null ? `[binary omitted: ${size} bytes]` : '[binary omitted]';
+                } else if (typeof value === 'string' && value.length > 2000) {
+                  // Truncate very long strings
+                  clone[key] = value.slice(0, 2000) + `... [omitted ${value.length - 2000} chars]`;
+                } else {
+                  clone[key] = value;
+                }
+              }
+              return clone;
+            }
+            return result;
+          } catch {
+            return { info: 'tool result (sanitization failed)' };
+          }
+        })();
+
         results.push({
           success: true,
           result,
           message: new ToolMessage({
-            content: JSON.stringify(result),
+            content: JSON.stringify(sanitized),
             tool_call_id: toolCall.id || '',
           }),
         });
