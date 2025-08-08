@@ -1,9 +1,47 @@
-/node_modules
+# dependencies (bun install)
+node_modules
+
+# test files
+test-files/
+test-embeds.js
+test-embed-tools.js
+/.claude
+/.cursor
+/.vscode
+imagegen.js
+start-chroma.sh
+test-*
+/hide
+/RAGdoll
+CLAUDE.md
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
 .env
-geminigrounding.md
-openrouterexample.js
-/chat_history
-/full_history
-test_*.js
-quick_test.js
-/mcdonalds-uk-survey-codes
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
