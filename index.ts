@@ -131,6 +131,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
   // Only respond when bot is mentioned
   if (!message.mentions.has(client.user!)) return;
   
+  // Prepare patience timer reference for long-running operations
+  let patienceTimeout: ReturnType<typeof setTimeout> | undefined;
+  
   try {
     // Clean the message content (remove the mention)
     const cleanContent = message.content
@@ -151,6 +154,19 @@ client.on(Events.MessageCreate, async (message: Message) => {
     if ('sendTyping' in message.channel) {
       await message.channel.sendTyping();
     }
+    
+    // Schedule a patience message if processing takes longer than 10 seconds
+    const patienceMessage = 'Thanks for your patience—this step is taking a bit longer than usual. I’m on it and will update you shortly.';
+    patienceTimeout = setTimeout(() => {
+      message.channel
+        .send({
+          content: patienceMessage,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        })
+        .catch(() => {});
+    }, 10_000);
+    (patienceTimeout as any).unref?.();
     
     // Get enhanced conversation history with RAG context
     const conversationHistory = await memoryManager.getEnhancedHistory(
@@ -288,6 +304,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const stats = EmbedResponse.getResponseStats(responseContent);
       console.log(`📨 Sending response: ${stats.length} chars, ${stats.chunks} chunks, embeds: ${stats.willUseEmbeds}`);
       
+      // Clear patience timer before sending the final response
+      if (patienceTimeout) clearTimeout(patienceTimeout);
+      
       await EmbedResponse.sendLongResponse(
         message,
         responseContent,
@@ -321,6 +340,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const stats = EmbedResponse.getResponseStats(responseContent);
       console.log(`📨 Sending response: ${stats.length} chars, ${stats.chunks} chunks, embeds: ${stats.willUseEmbeds}`);
       
+      // Clear patience timer before sending the final response
+      if (patienceTimeout) clearTimeout(patienceTimeout);
+      
       await EmbedResponse.sendLongResponse(
         message,
         responseContent,
@@ -334,6 +356,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     
   } catch (error) {
     console.error('Error processing message:', error);
+    // Clear patience timer before sending error response
+    if (patienceTimeout) clearTimeout(patienceTimeout);
     await EmbedResponse.sendError(
       message,
       'Sorry, I encountered an error while processing your message. Please try again.'
