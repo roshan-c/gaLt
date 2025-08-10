@@ -116,6 +116,29 @@ if (!g.__GA_LT_READY_LISTENER) {
     console.log(`🚀 ${readyClient.user.tag} is online and ready!`);
     console.log(`📊 Registered ${toolRegistry.getToolCount()} tools`);
     console.log(`🎨 Image generation available via GPT-Image-1`);
+
+    // Register a simple global slash command for chatting
+    if (!g.__GA_LT_COMMANDS_REGISTERED) {
+      const commands = [
+        {
+          name: 'chat',
+          description: 'Ask the assistant (supports tools like image generation)',
+          options: [
+            {
+              name: 'prompt',
+              description: 'What would you like to say? (the bot may use tools)',
+              type: 3, // STRING
+              required: true,
+            },
+          ],
+        },
+      ];
+      readyClient.application?.commands
+        .set(commands)
+        .then(() => console.log('📝 Slash commands registered'))
+        .catch((err) => console.error('Failed to register slash commands:', err));
+      g.__GA_LT_COMMANDS_REGISTERED = true;
+    }
   });
   g.__GA_LT_READY_LISTENER = true;
 }
@@ -368,6 +391,243 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 });
 g.__GA_LT_MESSAGE_LISTENER = true;
+}
+
+// Interaction (slash command) handling with true ephemeral notices
+if (!g.__GA_LT_INTERACTION_LISTENER) {
+  client.on(Events.InteractionCreate, async (interaction: any) => {
+    try {
+      if (!interaction.isChatInputCommand?.()) return;
+      if (interaction.commandName !== 'chat') return;
+
+      const cleanContent: string = interaction.options.getString('prompt', true);
+
+      // Show typing in the channel (non-blocking)
+      interaction.channel?.sendTyping?.();
+
+      // Defer ephemeral reply so we can follow up with notices
+      await interaction.deferReply({ ephemeral: true });
+
+      // Enhanced history via memory manager
+      const conversationHistory = await memoryManager.getEnhancedHistory(
+        interaction.user.id,
+        interaction.channelId,
+        cleanContent
+      );
+
+      await memoryManager.addMessage(
+        interaction.user.id,
+        interaction.channelId,
+        'user',
+        cleanContent
+      );
+
+      const messages = [
+        ...conversationHistory.map((msg: ConversationMessage) =>
+          msg.role === 'user' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
+        ),
+        new HumanMessage(cleanContent),
+      ];
+
+      const tokenTracker = new TokenTracker();
+      const response = await llmWithTools.invoke(messages, { callbacks: [tokenTracker] });
+
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        const toolsUsed = response.tool_calls.map((tc: any) => tc.name);
+        console.log(`🔧 Tools used (slash): ${toolsUsed.join(', ')}`);
+
+        const toolResults: ToolResult[] = [];
+        let imageToolUsed = false;
+        let imageGenNoticeSent = false;
+        for (const toolCall of response.tool_calls) {
+          if (toolCall.name === 'generate_image') {
+            if (imageToolUsed) {
+              toolResults.push({
+                success: true,
+                result: {
+                  success: false,
+                  message: 'Image already generated for this message; ignoring duplicate request.',
+                },
+                message: new ToolMessage({
+                  content: 'Image already generated for this message; ignoring duplicate request.',
+                  tool_call_id: toolCall.id || '',
+                }),
+              });
+              continue;
+            }
+
+            // Send ephemeral in-channel notice to only the user with a cat GIF
+            if (!imageGenNoticeSent) {
+              try {
+                const catGifUrl = 'https://cataas.com/cat/gif';
+                let files: any[] | undefined = undefined;
+                try {
+                  const resp = await fetch(catGifUrl);
+                  if (resp.ok) {
+                    const arrayBuffer = await resp.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    files = [{ attachment: buffer, name: 'please-wait-cat.gif' }];
+                  }
+                } catch (_) {}
+                await interaction.followUp({
+                  ephemeral: true,
+                  content:
+                    '🎨 Generating your image now — this can take a little while. I\'ll post it in the channel when it\'s ready! Here\'s a cat while you wait 😺',
+                  files,
+                });
+              } catch (notifyError) {
+                console.warn('Failed to send ephemeral image-generation notice:', notifyError);
+              }
+              imageGenNoticeSent = true;
+            }
+
+            imageToolUsed = true;
+          }
+          const [result] = await toolRegistry.executeTools([toolCall]);
+          toolResults.push(result);
+        }
+
+        // Prepare image attachments
+        const attachments: any[] = [];
+        let imagePrompt: string | undefined;
+        let imageFilename: string | undefined;
+        let imageAlreadyAttached = false;
+        for (let i = 0; i < response.tool_calls.length; i++) {
+          const toolCall = response.tool_calls[i];
+          const result = toolResults[i];
+          if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
+            try {
+              const rawResult: any = result.result;
+              if (rawResult?.success && rawResult.imageBuffer) {
+                const attachment = createImageAttachment(rawResult);
+                if (attachment) {
+                  attachments.push(attachment);
+                  imageAlreadyAttached = true;
+                }
+                if (!imagePrompt) imagePrompt = rawResult.prompt;
+                if (!imageFilename) imageFilename = rawResult.filename;
+              }
+            } catch (err) {
+              console.error('📎 Failed to create image attachment (slash):', err);
+            }
+          }
+        }
+
+        const toolMessages = toolResults.map((tr: ToolResult) => tr.message);
+        const recentContext = messages.slice(-6);
+        const finalResponse = await llmWithTools.invoke(
+          [...recentContext, response, ...toolMessages],
+          { callbacks: [tokenTracker] }
+        );
+
+        await memoryManager.addMessage(
+          interaction.user.id,
+          interaction.channelId,
+          'assistant',
+          finalResponse.content as string
+        );
+
+        // Send final response publicly in the same channel
+        try {
+          if (attachments.length > 0 && imagePrompt) {
+            const embed: any = {
+              color: 0x5865f2,
+              fields: [{ name: 'Prompt', value: imagePrompt }],
+              image: imageFilename ? { url: `attachment://${imageFilename}` } : undefined,
+              description: 'Here is your image',
+              title: '🤖 Response',
+            };
+            await interaction.channel?.send({
+              embeds: [embed],
+              files: attachments,
+              allowedMentions: { repliedUser: false },
+            });
+          } else {
+            const responseContent = finalResponse.content as string;
+            const chunks = EmbedResponse.chunkContent(responseContent);
+            const embeds = chunks.slice(0, 10).map((chunk, idx) => {
+              const footerInfo: string[] = [];
+              if (idx === chunks.length - 1) {
+                if (toolsUsed?.length) footerInfo.push(`Used tools: ${toolsUsed.join(', ')}`);
+                const usage = tokenTracker.getUsage();
+                footerInfo.push(
+                  `Tokens: ${usage.inputTokens} in, ${usage.outputTokens} out, ${usage.totalTokens} total`
+                );
+              }
+              const description = idx === chunks.length - 1 && footerInfo.length
+                ? `${chunk}\n\n*${footerInfo.join(' • ')}*`
+                : chunk;
+              const embed: any = {
+                color: 0x5865f2,
+                description,
+                title: idx === 0 ? '🤖 Response' : undefined,
+                footer:
+                  chunks.length > 1
+                    ? { text: `Page ${idx + 1} of ${Math.min(chunks.length, 10)}` }
+                    : undefined,
+                author:
+                  idx === 0
+                    ? { name: '🧠 Enhanced with conversation memory', icon_url: interaction.client.user?.displayAvatarURL() || undefined }
+                    : undefined,
+              };
+              return embed;
+            });
+            await interaction.channel?.send({
+              embeds,
+              allowedMentions: { repliedUser: false },
+            });
+          }
+        } catch (sendErr) {
+          console.error('Failed to send public response (slash):', sendErr);
+          await interaction.followUp({
+            ephemeral: true,
+            content: 'Sorry, I could not send the response to the channel.',
+          });
+        }
+      } else {
+        // No tools used; just send content publicly
+        const responseContent = response.content as string;
+        await memoryManager.addMessage(
+          interaction.user.id,
+          interaction.channelId,
+          'assistant',
+          responseContent
+        );
+        const chunks = EmbedResponse.chunkContent(responseContent);
+        const embeds = chunks.slice(0, 10).map((chunk, idx) => ({
+          color: 0x5865f2,
+          description: chunk,
+          title: idx === 0 ? '🤖 Response' : undefined,
+          footer:
+            chunks.length > 1
+              ? { text: `Page ${idx + 1} of ${Math.min(chunks.length, 10)}` }
+              : undefined,
+          author:
+            idx === 0
+              ? { name: '🧠 Enhanced with conversation memory', icon_url: interaction.client.user?.displayAvatarURL() || undefined }
+              : undefined,
+        }));
+        await interaction.channel?.send({ embeds, allowedMentions: { repliedUser: false } });
+      }
+
+      // Edit the ephemeral deferred reply to a short confirmation
+      try {
+        await interaction.editReply({ content: '✅ Done! Posted in the channel.' });
+      } catch {}
+    } catch (error) {
+      console.error('Error handling interaction:', error);
+      try {
+        if (interaction.isRepliable?.()) {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({ content: '❌ An error occurred.' });
+          } else {
+            await interaction.reply({ ephemeral: true, content: '❌ An error occurred.' });
+          }
+        }
+      } catch {}
+    }
+  });
+  g.__GA_LT_INTERACTION_LISTENER = true;
 }
 
 // Error handling
