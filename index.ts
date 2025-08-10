@@ -194,6 +194,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       // Execute tools with single-image policy: only allow the first generate_image per message
       const toolResults: ToolResult[] = [];
       let imageToolUsed = false;
+      let imageGenNoticeSent = false;
       for (const toolCall of response.tool_calls) {
         if (toolCall.name === 'generate_image') {
           if (imageToolUsed) {
@@ -210,6 +211,32 @@ client.on(Events.MessageCreate, async (message: Message) => {
             });
             continue;
           }
+
+          // Send a private notice to the author that image generation has started (with a cat GIF)
+          if (!imageGenNoticeSent) {
+            try {
+              const catGifUrl = 'https://cataas.com/cat/gif';
+              let files: any[] | undefined = undefined;
+              try {
+                const resp = await fetch(catGifUrl);
+                if (resp.ok) {
+                  const arrayBuffer = await resp.arrayBuffer();
+                  const buffer = Buffer.from(arrayBuffer);
+                  files = [{ attachment: buffer, name: 'please-wait-cat.gif' }];
+                }
+              } catch (_) {
+                // ignore fetch failure; we'll send text-only
+              }
+              await message.author.send({
+                content: '🎨 Generating your image now — this can take a little while. I\'ll post it in the channel when it\'s ready! Here\'s a cat while you wait 😺',
+                files,
+              });
+            } catch (notifyError) {
+              console.warn('Could not send DM to user about image generation start:', notifyError);
+            }
+            imageGenNoticeSent = true;
+          }
+
           imageToolUsed = true;
         }
         const [result] = await toolRegistry.executeTools([toolCall]);
