@@ -84,10 +84,10 @@ export class EmbedResponse {
     const embeds: EmbedBuilder[] = [];
 
     for (let i = 0; i < chunks.length && i < this.MAX_EMBEDS_PER_MESSAGE; i++) {
-      const chunk = chunks[i];
+      const chunk = chunks[i] ?? '';
       
       // Add tool usage and token info to the last chunk
-      let description = chunk;
+      let description = chunk.trimEnd();
       if (i === chunks.length - 1) {
         const footerInfo: string[] = [];
         
@@ -103,12 +103,12 @@ export class EmbedResponse {
         }
         
         if (footerInfo.length > 0) {
-          description += `\n\n*${footerInfo.join(' • ')}*`;
+          description = `${description}\n\n*${footerInfo.join(' • ')}*`;
         }
       }
       
       const embed = new EmbedBuilder()
-        .setDescription(description ?? '')
+        .setDescription(description)
         .setColor(options?.color || this.DEFAULT_COLOR);
 
       // Add title only to first embed
@@ -174,7 +174,7 @@ export class EmbedResponse {
 
   static chunkContent(content: string): string[] {
     if (content.length <= this.MAX_EMBED_DESCRIPTION) {
-      return [content];
+      return [content.trimEnd()];
     }
 
     const chunks: string[] = [];
@@ -182,7 +182,7 @@ export class EmbedResponse {
 
     while (remaining.length > 0) {
       if (remaining.length <= this.MAX_EMBED_DESCRIPTION) {
-        chunks.push(remaining);
+        chunks.push(remaining.trimEnd());
         break;
       }
 
@@ -216,7 +216,7 @@ export class EmbedResponse {
       remaining = remaining.substring(breakPoint).trim();
     }
 
-    return chunks;
+    return chunks.map(c => c.trimEnd());
   }
 
   static async sendError(message: Message, error: string): Promise<void> {
