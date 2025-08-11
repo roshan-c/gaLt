@@ -54,20 +54,28 @@ export class EmbedResponse {
       embed.setDescription('Here is your image');
 
       try {
-        await message.channel.send({
-          embeds: [embed],
-          files: options.attachments,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            embeds: [embed],
+            files: options.attachments,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply({ embeds: [embed], files: options.attachments });
+        }
       } catch (error) {
         console.error('Failed to send image embed response:', error);
-        await message.channel.send({
-          content: 'Here is your image',
-          files: options.attachments,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            content: 'Here is your image',
+            files: options.attachments,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply({ content: 'Here is your image', files: options.attachments });
+        }
       }
       return;
     }
@@ -100,7 +108,7 @@ export class EmbedResponse {
       }
       
       const embed = new EmbedBuilder()
-        .setDescription(description)
+        .setDescription(description ?? '')
         .setColor(options?.color || this.DEFAULT_COLOR);
 
       // Add title only to first embed
@@ -119,7 +127,7 @@ export class EmbedResponse {
       if (i === 0 && options?.includeContext) {
         embed.setAuthor({ 
           name: '🧠 Enhanced with conversation memory',
-          iconURL: message.client.user?.displayAvatarURL()
+          iconURL: message.client.user?.displayAvatarURL() || undefined
         });
       }
 
@@ -133,11 +141,15 @@ export class EmbedResponse {
         sendOptions.files = options.attachments;
       }
       // Prefer channel.send with explicit message reference to avoid edge cases in reply()
-      await message.channel.send({
-        ...sendOptions,
-        reply: { messageReference: message.id },
-        allowedMentions: { repliedUser: false },
-      });
+      if ('send' in message.channel) {
+        await (message.channel as any).send({
+          ...sendOptions,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+      } else {
+        await message.reply(sendOptions);
+      }
     } catch (error) {
       console.error('Failed to send embed response:', error);
       // Fallback to simple text response
@@ -145,11 +157,15 @@ export class EmbedResponse {
         ? content.substring(0, 1997) + '...'
         : content;
       try {
-        await message.channel.send({
-          content: truncated,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            content: truncated,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply(truncated);
+        }
       } catch {
         await message.reply(truncated);
       }

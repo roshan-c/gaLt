@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { MemoryManager } from './src/memory/MemoryManager';
@@ -13,16 +13,20 @@ import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGen
 // Load environment variables
 const config: BotConfig = {
   discordToken: process.env.DISCORD_TOKEN!,
-  openaiApiKey: process.env.OPENAI_API_KEY!,
-  openaiModel: process.env.OPENAI_MODEL!,
+  googleApiKey: process.env.GOOGLE_API_KEY!,
+  googleModel: process.env.GOOGLE_MODEL || 'gemini-2.0-flash',
 };
 
 // Validate environment variables
 if (!config.discordToken) {
   throw new Error('DISCORD_TOKEN environment variable is required');
 }
-if (!config.openaiApiKey) {
-  throw new Error('OPENAI_API_KEY environment variable is required');
+if (!config.googleApiKey) {
+  throw new Error('GOOGLE_API_KEY environment variable is required');
+}
+// OpenAI key is still required elsewhere (embeddings, image generation)
+if (!process.env.OPENAI_API_KEY) {
+  throw new Error('OPENAI_API_KEY environment variable is required for embeddings and image generation');
 }
 
 // Initialize Discord client (singleton across hot reloads)
@@ -71,7 +75,7 @@ class TokenTracker extends BaseCallbackHandler {
     this.totalTokens = 0;
   }
 
-  async handleLLMEnd(output: any) {
+  override async handleLLMEnd(output: any) {
     if (output.llmOutput?.tokenUsage) {
       const usage = output.llmOutput.tokenUsage;
       this.inputTokens += usage.promptTokens || 0;
@@ -89,10 +93,10 @@ class TokenTracker extends BaseCallbackHandler {
   }
 }
 
-// Initialize LangChain OpenAI model
-const llm = new ChatOpenAI({
-  openAIApiKey: config.openaiApiKey,
-  modelName: config.openaiModel,
+// Initialize LangChain Google Gemini model
+const llm = new ChatGoogleGenerativeAI({
+  apiKey: config.googleApiKey,
+  model: config.googleModel,
   temperature: 1,
 });
 
@@ -181,13 +185,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
     // Schedule a patience message if processing takes longer than 10 seconds
     const patienceMessage = 'Thanks for your patience—this step is taking a bit longer than usual. I’m on it and will update you shortly.';
     patienceTimeout = setTimeout(() => {
-      message.channel
-        .send({
-          content: patienceMessage,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        })
-        .catch(() => {});
+      if ('send' in message.channel) {
+        (message.channel as any)
+          .send({
+            content: patienceMessage,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          })
+          .catch(() => {});
+      }
     }, 10_000);
     (patienceTimeout as any).unref?.();
     
@@ -279,7 +285,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
           imageToolUsed = true;
         }
         const [result] = await toolRegistry.executeTools([toolCall]);
-        toolResults.push(result);
+        if (result) {
+          toolResults.push(result);
+        }
       }
       
       // Check for image generation results and create attachments
@@ -293,10 +301,12 @@ client.on(Events.MessageCreate, async (message: Message) => {
         const toolCall = response.tool_calls[i];
         const result = toolResults[i];
         
-        console.log(`🔍 Tool "${toolCall.name}" result:`, {
-          success: result.success,
-          hasResult: !!result.result
+        console.log(`🔍 Tool "${toolCall?.name}" result:`, {
+          success: result?.success,
+          hasResult: !!result?.result
         });
+        
+        if (!toolCall || !result) continue;
         
         // If this was an image generation tool, use the raw result from the first execution
         if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
@@ -508,7 +518,9 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
             imageToolUsed = true;
           }
           const [result] = await toolRegistry.executeTools([toolCall]);
-          toolResults.push(result);
+          if (result) {
+            toolResults.push(result);
+          }
         }
 
         // Prepare image attachments
@@ -519,6 +531,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
         for (let i = 0; i < response.tool_calls.length; i++) {
           const toolCall = response.tool_calls[i];
           const result = toolResults[i];
+          if (!toolCall || !result) continue;
           if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
             try {
               const rawResult: any = result.result;
