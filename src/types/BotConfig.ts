@@ -1,7 +1,7 @@
 export interface BotConfig {
   discordToken: string;
-  openaiApiKey: string;
-  openaiModel: string;
+  googleApiKey: string;
+  googleModel: string;
 }
 
 export interface ConversationMessage {

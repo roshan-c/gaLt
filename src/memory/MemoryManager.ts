@@ -88,7 +88,11 @@ export class MemoryManager {
         model: 'text-embedding-3-small',
         input: text
       });
-      return response.data[0].embedding;
+      const embedding = response?.data?.[0]?.embedding;
+      if (!embedding) {
+        throw new Error('No embedding returned');
+      }
+      return embedding as unknown as number[];
     } catch (error) {
       console.error('Failed to generate embedding:', error);
       throw error;

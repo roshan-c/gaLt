@@ -54,20 +54,28 @@ export class EmbedResponse {
       embed.setDescription('Here is your image');
 
       try {
-        await message.channel.send({
-          embeds: [embed],
-          files: options.attachments,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            embeds: [embed],
+            files: options.attachments,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply({ embeds: [embed], files: options.attachments });
+        }
       } catch (error) {
         console.error('Failed to send image embed response:', error);
-        await message.channel.send({
-          content: 'Here is your image',
-          files: options.attachments,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            content: 'Here is your image',
+            files: options.attachments,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply({ content: 'Here is your image', files: options.attachments });
+        }
       }
       return;
     }
@@ -76,10 +84,10 @@ export class EmbedResponse {
     const embeds: EmbedBuilder[] = [];
 
     for (let i = 0; i < chunks.length && i < this.MAX_EMBEDS_PER_MESSAGE; i++) {
-      const chunk = chunks[i];
+      const chunk = chunks[i] ?? '';
       
       // Add tool usage and token info to the last chunk
-      let description = chunk;
+      let description = chunk.trimEnd();
       if (i === chunks.length - 1) {
         const footerInfo: string[] = [];
         
@@ -95,7 +103,7 @@ export class EmbedResponse {
         }
         
         if (footerInfo.length > 0) {
-          description += `\n\n*${footerInfo.join(' • ')}*`;
+          description = `${description}\n\n*${footerInfo.join(' • ')}*`;
         }
       }
       
@@ -119,7 +127,7 @@ export class EmbedResponse {
       if (i === 0 && options?.includeContext) {
         embed.setAuthor({ 
           name: '🧠 Enhanced with conversation memory',
-          iconURL: message.client.user?.displayAvatarURL()
+          iconURL: message.client.user?.displayAvatarURL() || undefined
         });
       }
 
@@ -133,11 +141,15 @@ export class EmbedResponse {
         sendOptions.files = options.attachments;
       }
       // Prefer channel.send with explicit message reference to avoid edge cases in reply()
-      await message.channel.send({
-        ...sendOptions,
-        reply: { messageReference: message.id },
-        allowedMentions: { repliedUser: false },
-      });
+      if ('send' in message.channel) {
+        await (message.channel as any).send({
+          ...sendOptions,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+      } else {
+        await message.reply(sendOptions);
+      }
     } catch (error) {
       console.error('Failed to send embed response:', error);
       // Fallback to simple text response
@@ -145,11 +157,15 @@ export class EmbedResponse {
         ? content.substring(0, 1997) + '...'
         : content;
       try {
-        await message.channel.send({
-          content: truncated,
-          reply: { messageReference: message.id },
-          allowedMentions: { repliedUser: false },
-        });
+        if ('send' in message.channel) {
+          await (message.channel as any).send({
+            content: truncated,
+            reply: { messageReference: message.id },
+            allowedMentions: { repliedUser: false },
+          });
+        } else {
+          await message.reply(truncated);
+        }
       } catch {
         await message.reply(truncated);
       }
@@ -158,7 +174,7 @@ export class EmbedResponse {
 
   static chunkContent(content: string): string[] {
     if (content.length <= this.MAX_EMBED_DESCRIPTION) {
-      return [content];
+      return [content.trimEnd()];
     }
 
     const chunks: string[] = [];
@@ -166,7 +182,7 @@ export class EmbedResponse {
 
     while (remaining.length > 0) {
       if (remaining.length <= this.MAX_EMBED_DESCRIPTION) {
-        chunks.push(remaining);
+        chunks.push(remaining.trimEnd());
         break;
       }
 
@@ -200,7 +216,7 @@ export class EmbedResponse {
       remaining = remaining.substring(breakPoint).trim();
     }
 
-    return chunks;
+    return chunks.map(c => c.trimEnd());
   }
 
   static async sendError(message: Message, error: string): Promise<void> {
