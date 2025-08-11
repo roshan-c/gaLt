@@ -9,6 +9,7 @@ import type { BotConfig, ConversationMessage, ToolResult } from './src/types/Bot
 import { calculatorTool, timeTool } from './src/tools/examples/ExampleTool';
 import { weatherTool, randomFactTool } from './src/tools/examples/WeatherTool';
 import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGenerationTool';
+import webSearchTool from './src/tools/WebSearchTool';
 
 // Load environment variables
 const config: BotConfig = {
@@ -110,6 +111,7 @@ toolRegistry.registerTool(timeTool);
 toolRegistry.registerTool(weatherTool);
 toolRegistry.registerTool(randomFactTool);
 toolRegistry.registerTool(imageGenerationTool);
+  toolRegistry.registerTool(webSearchTool);
 
 // Bind tools to the LLM
 const llmWithTools = llm.bindTools(toolRegistry.getToolDefinitions());
@@ -160,6 +162,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
   
   // Prepare patience timer reference for long-running operations
   let patienceTimeout: ReturnType<typeof setTimeout> | undefined;
+  let patienceFired = false;
+  let patienceMessageRef: Message | undefined;
   
   try {
     // Clean the message content (remove the mention)
@@ -183,18 +187,10 @@ client.on(Events.MessageCreate, async (message: Message) => {
     }
     
     // Schedule a patience message if processing takes longer than 10 seconds
-    const patienceMessage = 'Thanks for your patience—this step is taking a bit longer than usual. I’m on it and will update you shortly.';
-    patienceTimeout = setTimeout(() => {
-      if ('send' in message.channel) {
-        (message.channel as any)
-          .send({
-            content: patienceMessage,
-            reply: { messageReference: message.id },
-            allowedMentions: { repliedUser: false },
-          })
-          .catch(() => {});
-      }
-    }, 10_000);
+    patienceTimeout = setTimeout(async () => {
+      patienceFired = true;
+      patienceMessageRef = await EmbedResponse.sendPatienceReply(message);
+    }, 7_000);
     (patienceTimeout as any).unref?.();
     
     // Get enhanced conversation history with RAG context
@@ -239,7 +235,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
       // Execute tools with single-image policy: only allow the first generate_image per message
       const toolResults: ToolResult[] = [];
       let imageToolUsed = false;
-      let imageGenNoticeSent = false;
       for (const toolCall of response.tool_calls) {
         if (toolCall.name === 'generate_image') {
           if (imageToolUsed) {
@@ -255,31 +250,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
               }),
             });
             continue;
-          }
-
-          // Send a private notice to the author that image generation has started (with a cat GIF)
-          if (!imageGenNoticeSent) {
-            try {
-              const catGifUrl = 'https://cataas.com/cat/gif';
-              let files: any[] | undefined = undefined;
-              try {
-                const resp = await fetch(catGifUrl);
-                if (resp.ok) {
-                  const arrayBuffer = await resp.arrayBuffer();
-                  const buffer = Buffer.from(arrayBuffer);
-                  files = [{ attachment: buffer, name: 'please-wait-cat.gif' }];
-                }
-              } catch (_) {
-                // ignore fetch failure; we'll send text-only
-              }
-              await message.author.send({
-                content: '🎨 Generating your image now — this can take a little while. I\'ll post it in the channel when it\'s ready! Here\'s a cat while you wait 😺',
-                files,
-              });
-            } catch (notifyError) {
-              console.warn('Could not send DM to user about image generation start:', notifyError);
-            }
-            imageGenNoticeSent = true;
           }
 
           imageToolUsed = true;
@@ -364,8 +334,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const stats = EmbedResponse.getResponseStats(responseContent);
       console.log(`📨 Sending response: ${stats.length} chars, ${stats.chunks} chunks, embeds: ${stats.willUseEmbeds}`);
       
-      // Clear patience timer before sending the final response
+      // Clear patience timer and delete patience message before sending the final response
       if (patienceTimeout) clearTimeout(patienceTimeout);
+      try { if (patienceMessageRef) await patienceMessageRef.delete(); } catch {}
       
       await EmbedResponse.sendLongResponse(
         message,
@@ -400,8 +371,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const stats = EmbedResponse.getResponseStats(responseContent);
       console.log(`📨 Sending response: ${stats.length} chars, ${stats.chunks} chunks, embeds: ${stats.willUseEmbeds}`);
       
-      // Clear patience timer before sending the final response
+      // Clear patience timer and delete patience message before sending the final response
       if (patienceTimeout) clearTimeout(patienceTimeout);
+      try { if (patienceMessageRef) await patienceMessageRef.delete(); } catch {}
       
       await EmbedResponse.sendLongResponse(
         message,
@@ -416,8 +388,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
     
   } catch (error) {
     console.error('Error processing message:', error);
-    // Clear patience timer before sending error response
+    // Clear patience timer and delete patience message before sending error response
     if (patienceTimeout) clearTimeout(patienceTimeout);
+    try { if (patienceMessageRef) await patienceMessageRef.delete(); } catch {}
     await EmbedResponse.sendError(
       message,
       'Sorry, I encountered an error while processing your message. Please try again.'

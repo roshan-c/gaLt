@@ -172,6 +172,68 @@ export class EmbedResponse {
     }
   }
 
+  static async buildPatiencePayload(): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] }> {
+    return this.buildCatGifPayload({
+      title: '⏳ Thanks for your patience',
+      description:
+        'Sorry this is taking a little while. I’m working on your request. Here’s a cat while you wait 😺',
+    });
+  }
+
+  static async buildCatGifPayload({
+    title,
+    description,
+    fileName = 'please-wait-cat.gif',
+  }: {
+    title: string;
+    description: string;
+    fileName?: string;
+  }): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] }> {
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description)
+      .setColor(this.DEFAULT_COLOR);
+
+    const catGifUrl = 'https://cataas.com/cat/gif';
+    let files: AttachmentBuilder[] | undefined = undefined;
+    try {
+      const resp = await fetch(catGifUrl);
+      if (resp.ok) {
+        const arrayBuffer = await resp.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const file = new AttachmentBuilder(buffer, { name: fileName });
+        files = [file];
+        embed.setImage(`attachment://${fileName}`);
+      } else {
+        embed.setImage(catGifUrl);
+      }
+    } catch {
+      embed.setImage(catGifUrl);
+    }
+
+    return { embeds: [embed], files };
+  }
+
+  static async sendPatienceReply(message: Message): Promise<Message | undefined> {
+    try {
+      const payload = await this.buildPatiencePayload();
+      if ('send' in message.channel) {
+        const sent = await (message.channel as any).send({
+          ...payload,
+          reply: { messageReference: message.id },
+          allowedMentions: { repliedUser: false },
+        });
+        return sent as Message;
+      } else {
+        const sent = await message.reply(payload as any);
+        return sent as Message;
+      }
+    } catch {
+      // Silent fail; this is a non-critical courtesy message
+      return undefined;
+    }
+  }
+
   static chunkContent(content: string): string[] {
     if (content.length <= this.MAX_EMBED_DESCRIPTION) {
       return [content.trimEnd()];
