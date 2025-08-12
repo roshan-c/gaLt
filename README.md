@@ -8,6 +8,10 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
 - [Usage](#usage)
+  - [Image generation behavior](#image-generation-behavior)
+  - [Patience message behavior](#patience-message-behavior)
+  - [Circuit breaker behavior](#circuit-breaker-behavior)
+  - [Metrics dashboard](#metrics-dashboard)
 - [Project Structure](#project-structure)
 - [Creating Custom Tools](#creating-custom-tools)
 - [Built-in Tools](#built-in-tools)
@@ -15,6 +19,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
   - [Time Tool](#time-tool)
   - [Weather Tool (Mock)](#weather-tool-mock)
   - [Random Facts Tool](#random-facts-tool)
+  - [Web Search Tool](#web-search-tool)
 - [Memory System (RAG)](#memory-system-rag)
 - [Available Scripts](#available-scripts)
 - [Environment Variables](#environment-variables)
@@ -40,6 +45,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 - **Web Search**: Live web search using Tavily, compressed to grounded summaries
 - **Patience Message**: Auto-posts a “please wait” embed with a cat GIF after a short delay and deletes it when the final answer is sent
 - **Circuit Breaker**: Automatic failover from Gemini to OpenAI on specific errors; health-checks and recovery after 10 minutes
+ - **Metrics Dashboard**: Built-in web UI showing daily requests, tokens, tool calls, images, and estimated cost (http://localhost:8787)
 
 ## 🚀 Quick Start
 
@@ -116,6 +122,13 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 - While tripped, all requests use OpenAI `gpt-5-mini` instead.
 - After 10 minutes, a health probe is sent to Gemini; if successful, the bot switches back automatically.
 
+### Metrics dashboard
+- Starts automatically on bot ready (Bun). Default port: `8787`; override with `METRICS_PORT`.
+- Endpoints:
+  - UI: `http://localhost:8787`
+  - API: `GET /api/metrics` (JSON with daily aggregates)
+- Tracks: requests, tokens (in/out/total + cost), tool calls, images (with cost).
+
 ## 🔧 Project Structure
 
 ```
@@ -123,6 +136,11 @@ gaLt/
 ├── src/
 │   ├── memory/
 │   │   └── MemoryManager.ts      # RAG conversation memory
+|   ├── utils/
+│   │   ├── Metrics.ts            # Daily metrics tracking
+│   │   └── Pricing.ts            # Cost estimation helpers
+|   ├── metrics/
+|   │   └── MetricsDashboard.ts   # Web UI for metrics
 │   ├── tools/
 │   │   ├── ToolRegistry.ts       # Tool management system
 │   │   ├── ImageGenerationTool.ts # GPT-Image-1 image generation tool
@@ -231,6 +249,8 @@ bun run test
 | `CHROMA_URL` | ChromaDB URL for RAG memory | ❌ | `http://localhost:8000` |
 | `LANGSMITH_API_KEY` | LangSmith tracing key | ❌ | - |
 | `LANGSMITH_TRACING` | Enable LangSmith tracing | ❌ | `false` |
+| `METRICS_PORT` | Port for the metrics dashboard | ❌ | `8787` |
+| `IMAGE_COST_1024_LOW_USD` | Est. cost per 1024×1024 low-quality image | ❌ | `0.04` |
 
 ## 🚀 Deployment
 

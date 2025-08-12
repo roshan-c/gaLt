@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { tool } from '@langchain/core/tools';
 import { ToolMessage } from '@langchain/core/messages';
 import type { ToolCall, ToolResult } from '../types/BotConfig';
+import { metrics } from '../utils/Metrics';
 
 export interface BotTool {
   name: string;
@@ -117,6 +118,7 @@ export class ToolRegistry {
             tool_call_id: toolCall.id || '',
           }),
         });
+        try { metrics.recordToolCall(toolCall.name, true); } catch {}
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         results.push({
@@ -128,6 +130,7 @@ export class ToolRegistry {
             tool_call_id: toolCall.id || '',
           }),
         });
+        try { metrics.recordToolCall(toolCall.name, false); } catch {}
       }
     }
 

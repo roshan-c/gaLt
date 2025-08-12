@@ -11,6 +11,9 @@ import { calculatorTool, timeTool } from './src/tools/examples/ExampleTool';
 import { weatherTool, randomFactTool } from './src/tools/examples/WeatherTool';
 import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGenerationTool';
 import webSearchTool from './src/tools/WebSearchTool';
+import { metrics } from './src/utils/Metrics';
+import { getImageCostUSD, getOpenAiPerTokenCostsUSD } from './src/utils/Pricing';
+import { startMetricsServer } from './src/metrics/DashboardServer';
 
 // Load environment variables
 const config: BotConfig = {
@@ -192,6 +195,7 @@ function getLlmWithTools() {
 async function invokeWithCircuitBreaker(messages: any[], callbacks: any[]) {
   const usingGemini = getActiveLlm() === geminiLlm;
   try {
+    metrics.recordRequest();
     return await getLlmWithTools().invoke(messages, { callbacks });
   } catch (error) {
     const status = getErrorStatusCode(error);
@@ -233,6 +237,8 @@ if (!g.__GA_LT_READY_LISTENER) {
     console.log(`🚀 ${readyClient.user.tag} is online and ready!`);
     console.log(`📊 Registered ${toolRegistry.getToolCount()} tools`);
     console.log(`🎨 Image generation available via GPT-Image-1`);
+    // Start metrics dashboard server (Bun only). Set METRICS_PORT to override.
+    try { startMetricsServer(); } catch (err) { console.warn('Metrics dashboard failed to start:', err); }
 
     // Register a simple global slash command for chatting
     if (!g.__GA_LT_COMMANDS_REGISTERED) {
@@ -367,6 +373,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
           imageToolUsed = true;
         }
         const [result] = await toolRegistry.executeTools([toolCall]);
+        metrics.recordToolCall(toolCall.name, !!result?.success);
         if (result) {
           toolResults.push(result);
         }
@@ -407,6 +414,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
                 console.log('📎 Created image attachment successfully');
                 imageAlreadyAttached = true;
               }
+              // Estimate image cost via configurable pricing
+              metrics.recordImageGeneration(getImageCostUSD('1024', 'low'));
               // Capture prompt and filename for embed formatting
               if (!imagePrompt) imagePrompt = rawResult.prompt;
               if (!imageFilename) imageFilename = rawResult.filename;
@@ -440,6 +449,14 @@ client.on(Events.MessageCreate, async (message: Message) => {
       
       // Get token usage stats
       const tokenUsage = tokenTracker.getUsage();
+      // Add cost estimate: Gemini is free; OpenAI priced per your rule
+      let tokenCost = 0;
+      if (getActiveLlm() === openaiLlm) {
+        const { inputPerToken, outputPerToken } = getOpenAiPerTokenCostsUSD();
+        tokenCost = tokenUsage.inputTokens * inputPerToken + tokenUsage.outputTokens * outputPerToken;
+      }
+      try { metrics.recordTokens(tokenUsage.inputTokens, tokenUsage.outputTokens, tokenUsage.totalTokens, tokenCost); } catch {}
+      try { metrics.recordTokens(tokenUsage.inputTokens, tokenUsage.outputTokens, tokenUsage.totalTokens); } catch {}
       console.log(`📊 Token usage: ${tokenUsage.inputTokens} input, ${tokenUsage.outputTokens} output, ${tokenUsage.totalTokens} total`);
       
       // Send response to Discord using embeds with tool indicators
@@ -478,6 +495,13 @@ client.on(Events.MessageCreate, async (message: Message) => {
       
       // Get token usage stats
       const tokenUsage = tokenTracker.getUsage();
+      let tokenCost = 0;
+      if (getActiveLlm() === openaiLlm) {
+        const { inputPerToken, outputPerToken } = getOpenAiPerTokenCostsUSD();
+        tokenCost = tokenUsage.inputTokens * inputPerToken + tokenUsage.outputTokens * outputPerToken;
+      }
+      try { metrics.recordTokens(tokenUsage.inputTokens, tokenUsage.outputTokens, tokenUsage.totalTokens, tokenCost); } catch {}
+      try { metrics.recordTokens(tokenUsage.inputTokens, tokenUsage.outputTokens, tokenUsage.totalTokens); } catch {}
       console.log(`📊 Token usage: ${tokenUsage.inputTokens} input, ${tokenUsage.outputTokens} output, ${tokenUsage.totalTokens} total`);
       
       // Send response to Discord using embeds (no tools used)
