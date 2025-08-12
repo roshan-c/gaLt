@@ -30,13 +30,16 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 
 ## 🌟 Features
 
-- **AI-Powered Conversations**: Uses OpenAI models via LangChain for intelligent responses
+- **AI-Powered Conversations**: Uses Gemini by default via LangChain, with automatic failover to OpenAI (GPT‑5‑mini)
 - **Persistent Memory**: RAG system maintains conversation context across sessions
 - **Tool System**: Extensible framework for adding custom functionality
 - **Mention-Based Interaction**: Bot responds when mentioned in channels
 - **TypeScript**: Full type safety and modern development experience
 - **Bun Runtime**: Fast JavaScript runtime with built-in package management
 - **Image Generation**: Generate images via GPT-Image-1 with a clean, single-embed response
+- **Web Search**: Live web search using Tavily, compressed to grounded summaries
+- **Patience Message**: Auto-posts a “please wait” embed with a cat GIF after a short delay and deletes it when the final answer is sent
+- **Circuit Breaker**: Automatic failover from Gemini to OpenAI on specific errors; health-checks and recovery after 10 minutes
 
 ## 🚀 Quick Start
 
@@ -45,7 +48,9 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
 - [Bun](https://bun.sh) (v1.2.19 or later)
 - Node.js (v18 or later) - optional, Bun is preferred
 - Discord Bot Token
+- Google API Key (Gemini)
 - OpenAI API Key
+- Tavily API Key (for web search)
 
 ### Installation
 
@@ -101,6 +106,16 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
   - A short line: "Here is your image"
 - No download link is included. Ensure the bot has the "Attach Files" permission in the channel.
 
+### Patience message behavior
+- If a response takes longer than a few seconds (default: ~7s), the bot posts a “Thanks for your patience” embed with a cat GIF from `https://cataas.com/cat/gif`.
+- When the final answer is ready (or on error), that patience message is automatically deleted.
+
+### Circuit breaker behavior
+- Primary model: Gemini (`{{default model in config}}`).
+- If Gemini returns one of these errors: 400, 403, 404, 429, 500, 503, 504 — the circuit breaker trips.
+- While tripped, all requests use OpenAI `gpt-5-mini` instead.
+- After 10 minutes, a health probe is sent to Gemini; if successful, the bot switches back automatically.
+
 ## 🔧 Project Structure
 
 ```
@@ -111,12 +126,14 @@ gaLt/
 │   ├── tools/
 │   │   ├── ToolRegistry.ts       # Tool management system
 │   │   ├── ImageGenerationTool.ts # GPT-Image-1 image generation tool
+│   │   ├── WebSearchTool.ts      # Live web search with Tavily + OpenAI compression
 │   │   └── examples/
 │   │       ├── ExampleTool.ts    # Calculator & time tools
 │   │       └── WeatherTool.ts    # Weather & facts tools
 │   └── types/
 │       └── BotConfig.ts          # TypeScript interfaces
 ├── index.ts                      # Main bot entry point
+├── SYSTEM.md                     # System prompt (identity, style, rules)
 ├── package.json                  # Dependencies & scripts
 ├── tsconfig.json                 # TypeScript configuration
 └── .env.example                  # Environment template
@@ -171,6 +188,12 @@ toolRegistry.registerTool(myCustomTool);
 - **Description**: Generates random interesting facts by category
 - **Usage**: "Tell me a science fact" or "Random fact about history"
 
+### Web Search Tool
+- **Name**: `web_search`
+- **Description**: Performs a live search via Tavily and compresses results into a short, grounded summary using OpenAI
+- **Usage**: "Search for the best cafes in York, UK" or "What are the latest Node.js LTS changes?"
+- **Notes**: Requires `TAVILY_API_KEY`. The response includes a summary, key points, and cited sources.
+
 ## 🧠 Memory System (RAG)
 
 The bot maintains conversation context using a simple but effective RAG system:
@@ -201,8 +224,10 @@ bun run test
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
 | `DISCORD_TOKEN` | Your Discord bot token | ✅ | - |
-| `OPENAI_API_KEY` | Your OpenAI API key | ✅ | - |
-| `OPENAI_MODEL` | Chat model to use (e.g., `gpt-5-mini`, `gpt-4o-mini`, `gpt-4.1`) | ✅ | `gpt-5-mini` |
+| `GOOGLE_API_KEY` | Google API key for Gemini | ✅ | - |
+| `GOOGLE_MODEL` | Gemini model name | ❌ | `gemini-2.0-flash` |
+| `OPENAI_API_KEY` | OpenAI API key (fallback + image generation + compression) | ✅ | - |
+| `TAVILY_API_KEY` | Tavily API key for web search | ✅ | - |
 | `CHROMA_URL` | ChromaDB URL for RAG memory | ❌ | `http://localhost:8000` |
 | `LANGSMITH_API_KEY` | LangSmith tracing key | ❌ | - |
 | `LANGSMITH_TRACING` | Enable LangSmith tracing | ❌ | `false` |
@@ -269,7 +294,10 @@ graph TD
     A[Discord Message] --> B[Bot Event Handler]
     B --> C[Clean & Validate Input]
     C --> D[Memory Manager]
-    D --> E[LangChain + OpenAI]
+    D --> E[LangChain + Active Model]
+    subgraph CB[Circuit Breaker]
+      E -->|Gemini error 4xx/5xx| Fallback[Switch to OpenAI]
+    end
     E --> F[Tool Registry]
     F --> G[Execute Tools]
     G --> H[Final Response]
