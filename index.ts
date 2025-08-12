@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
+import { HumanMessage, AIMessage, ToolMessage, SystemMessage } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { MemoryManager } from './src/memory/MemoryManager';
 import { ToolRegistry } from './src/tools/ToolRegistry';
@@ -116,6 +116,25 @@ toolRegistry.registerTool(imageGenerationTool);
 // Bind tools to the LLM
 const llmWithTools = llm.bindTools(toolRegistry.getToolDefinitions());
 
+// Load and prepare system prompt
+import fs from 'fs';
+import path from 'path';
+const systemPromptPath = path.resolve(__dirname, 'SYSTEM.md');
+let baseSystemPrompt = '';
+try {
+  baseSystemPrompt = fs.readFileSync(systemPromptPath, 'utf-8');
+} catch {
+  baseSystemPrompt = 'You are gaLt, an AI assistant.';
+}
+function buildSystemMessage(): SystemMessage {
+  const toolsList = toolRegistry.getAllTools().map(t => `- ${t.name}: ${t.description}`).join('\n');
+  const rendered = baseSystemPrompt
+    .replace(/\{\{MODEL_NAME\}\}/g, config.googleModel)
+    .replace(/\{\{DATETIME\}\}/g, new Date().toString())
+    .replace(/\{\{TOOLS\}\}/g, toolsList);
+  return new SystemMessage(rendered);
+}
+
 // Bot ready event
 if (!g.__GA_LT_READY_LISTENER) {
   client.once(Events.ClientReady, (readyClient) => {
@@ -210,6 +229,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     
     // Prepare messages for LangChain (conversationHistory already includes current context)
     const messages = [
+      buildSystemMessage(),
       ...conversationHistory.map((msg: ConversationMessage) => 
         msg.role === 'user' 
           ? new HumanMessage(msg.content)
@@ -312,6 +332,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       // Limit the amount of prior context to avoid huge token usage on the second call
       const recentContext = messages.slice(-6);
       const finalResponse = await llmWithTools.invoke([
+        buildSystemMessage(),
         ...recentContext,
         response,
         ...toolMessages
@@ -430,6 +451,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
       );
 
       const messages = [
+        buildSystemMessage(),
         ...conversationHistory.map((msg: ConversationMessage) =>
           msg.role === 'user' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
         ),
@@ -526,7 +548,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
         const toolMessages = toolResults.map((tr: ToolResult) => tr.message);
         const recentContext = messages.slice(-6);
         const finalResponse = await llmWithTools.invoke(
-          [...recentContext, response, ...toolMessages],
+          [buildSystemMessage(), ...recentContext, response, ...toolMessages],
           { callbacks: [tokenTracker] }
         );
 
