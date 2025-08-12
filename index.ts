@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, AIMessage, ToolMessage, SystemMessage } from '@langchain/core/messages';
 import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { MemoryManager } from './src/memory/MemoryManager';
@@ -94,10 +95,14 @@ class TokenTracker extends BaseCallbackHandler {
   }
 }
 
-// Initialize LangChain Google Gemini model
-const llm = new ChatGoogleGenerativeAI({
+// Initialize primary (Gemini) and fallback (OpenAI) models
+const geminiLlm = new ChatGoogleGenerativeAI({
   apiKey: config.googleApiKey,
   model: config.googleModel,
+  temperature: 1,
+});
+const openaiLlm = new ChatOpenAI({
+  model: 'gpt-5-mini',
   temperature: 1,
 });
 
@@ -113,8 +118,95 @@ toolRegistry.registerTool(randomFactTool);
 toolRegistry.registerTool(imageGenerationTool);
   toolRegistry.registerTool(webSearchTool);
 
-// Bind tools to the LLM
-const llmWithTools = llm.bindTools(toolRegistry.getToolDefinitions());
+// Circuit breaker state (global across hot reloads)
+type CircuitState = {
+  tripped: boolean;
+  untilTs: number | null;
+  testTimer?: ReturnType<typeof setTimeout>;
+};
+const cb: CircuitState = (g.__GA_LT_CIRCUIT as CircuitState) || { tripped: false, untilTs: null };
+g.__GA_LT_CIRCUIT = cb;
+
+const CB_ERROR_CODES = new Set([400, 403, 404, 429, 500, 503, 504]);
+
+function getErrorStatusCode(error: any): number | undefined {
+  // Try common places where status might live
+  if (!error) return undefined;
+  if (typeof error.status === 'number') return error.status;
+  if (typeof error.code === 'number') return error.code;
+  if (typeof error.code === 'string') {
+    const maybe = Number(error.code);
+    if (!Number.isNaN(maybe)) return maybe;
+  }
+  const resp = (error.response || error.res || error.error || {}) as any;
+  if (typeof resp.status === 'number') return resp.status;
+  return undefined;
+}
+
+function tripCircuitBreakerFor(durationMs: number) {
+  cb.tripped = true;
+  cb.untilTs = Date.now() + durationMs;
+  if (cb.testTimer) {
+    try { cb.testTimer && clearTimeout(cb.testTimer); } catch {}
+  }
+  cb.testTimer = setTimeout(async () => {
+    try {
+      // Minimal health probe to Gemini without tools
+      await geminiLlm.invoke([new HumanMessage('ping')]);
+      // Success: reset breaker
+      cb.tripped = false;
+      cb.untilTs = null;
+      if (cb.testTimer) { try { clearTimeout(cb.testTimer); } catch {} }
+      cb.testTimer = undefined;
+      console.log('✅ Circuit breaker: Gemini healthy again. Switching back.');
+    } catch (err) {
+      const status = getErrorStatusCode(err);
+      console.warn('⚠️ Circuit breaker test failed, status:', status);
+      // Reschedule another test in 10 minutes
+      tripCircuitBreakerFor(10 * 60 * 1000);
+    }
+  }, Math.max(1, durationMs));
+  (cb.testTimer as any).unref?.();
+  console.warn('🚨 Circuit breaker tripped: routing to OpenAI for', durationMs, 'ms');
+}
+
+function getActiveLlm() {
+  if (cb.tripped) return openaiLlm;
+  // If breaker has an expiry in the past, consider it recovered
+  if (cb.untilTs && Date.now() > cb.untilTs) {
+    cb.tripped = false;
+    cb.untilTs = null;
+  }
+  return geminiLlm;
+}
+
+function getActiveModelName(): string {
+  const llm = getActiveLlm();
+  return llm === openaiLlm ? 'gpt-5-mini' : config.googleModel;
+}
+
+function getLlmWithTools() {
+  return getActiveLlm().bindTools(toolRegistry.getToolDefinitions());
+}
+
+async function invokeWithCircuitBreaker(messages: any[], callbacks: any[]) {
+  const usingGemini = getActiveLlm() === geminiLlm;
+  try {
+    return await getLlmWithTools().invoke(messages, { callbacks });
+  } catch (error) {
+    const status = getErrorStatusCode(error);
+    if (usingGemini && status && CB_ERROR_CODES.has(status)) {
+      // Trip for 10 minutes and retry once on OpenAI
+      tripCircuitBreakerFor(10 * 60 * 1000);
+      try {
+        return await getLlmWithTools().invoke(messages, { callbacks });
+      } catch (retryErr) {
+        throw retryErr;
+      }
+    }
+    throw error;
+  }
+}
 
 // Load and prepare system prompt
 import fs from 'fs';
@@ -129,7 +221,7 @@ try {
 function buildSystemMessage(): SystemMessage {
   const toolsList = toolRegistry.getAllTools().map(t => `- ${t.name}: ${t.description}`).join('\n');
   const rendered = baseSystemPrompt
-    .replace(/\{\{MODEL_NAME\}\}/g, config.googleModel)
+    .replace(/\{\{MODEL_NAME\}\}/g, getActiveModelName())
     .replace(/\{\{DATETIME\}\}/g, new Date().toString())
     .replace(/\{\{TOOLS\}\}/g, toolsList);
   return new SystemMessage(rendered);
@@ -244,7 +336,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     const tokenTracker = new TokenTracker();
     
     // Get response from LangChain with tools
-    const response = await llmWithTools.invoke(messages, { callbacks: [tokenTracker] });
+    const response = await invokeWithCircuitBreaker(messages, [tokenTracker]);
     
     // Handle tool calls if present
     if (response.tool_calls && response.tool_calls.length > 0) {
@@ -331,12 +423,12 @@ client.on(Events.MessageCreate, async (message: Message) => {
       const toolMessages = toolResults.map((result: ToolResult) => result.message);
       // Limit the amount of prior context to avoid huge token usage on the second call
       const recentContext = messages.slice(-6);
-      const finalResponse = await llmWithTools.invoke([
+      const finalResponse = await invokeWithCircuitBreaker([
         buildSystemMessage(),
         ...recentContext,
         response,
         ...toolMessages
-      ], { callbacks: [tokenTracker] });
+      ], [tokenTracker]);
       
       // Add final response to memory
       await memoryManager.addMessage(
@@ -459,7 +551,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
       ];
 
       const tokenTracker = new TokenTracker();
-      const response = await llmWithTools.invoke(messages, { callbacks: [tokenTracker] });
+      const response = await invokeWithCircuitBreaker(messages, [tokenTracker]);
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         const toolsUsed = response.tool_calls.map((tc: any) => tc.name);
@@ -547,9 +639,9 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
 
         const toolMessages = toolResults.map((tr: ToolResult) => tr.message);
         const recentContext = messages.slice(-6);
-        const finalResponse = await llmWithTools.invoke(
+        const finalResponse = await invokeWithCircuitBreaker(
           [buildSystemMessage(), ...recentContext, response, ...toolMessages],
-          { callbacks: [tokenTracker] }
+          [tokenTracker]
         );
 
         await memoryManager.addMessage(
