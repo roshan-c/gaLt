@@ -2,6 +2,7 @@ export interface BotConfig {
   discordToken: string;
   googleApiKey: string;
   googleModel: string;
+  guildId?: string;
 }
 
 export interface ConversationMessage {

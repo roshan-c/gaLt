@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Message, MessageFlags } from 'discord.js';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, AIMessage, ToolMessage, SystemMessage } from '@langchain/core/messages';
@@ -14,12 +14,15 @@ import webSearchTool from './src/tools/WebSearchTool';
 import { metrics } from './src/utils/Metrics';
 import { getImageCostUSD, getOpenAiPerTokenCostsUSD } from './src/utils/Pricing';
 import { startMetricsServer } from './src/metrics/DashboardServer';
+import { VoiceSession } from './src/voice/VoiceSession';
+import { GeminiLiveSession } from './src/voice/GeminiLiveSession';
 
 // Load environment variables
 const config: BotConfig = {
   discordToken: process.env.DISCORD_TOKEN!,
   googleApiKey: process.env.GOOGLE_API_KEY!,
   googleModel: process.env.GOOGLE_MODEL || 'gemini-2.0-flash',
+  guildId: process.env.GUILD_ID,
 };
 
 // Validate environment variables
@@ -43,6 +46,7 @@ if (!client) {
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildVoiceStates,
     ],
   });
   g.__GA_LT_CLIENT = client;
@@ -255,11 +259,37 @@ if (!g.__GA_LT_READY_LISTENER) {
             },
           ],
         },
+        {
+          name: 'join',
+          description: 'Ask the bot to join your current voice channel and listen briefly',
+          options: [],
+        },
+        {
+          name: 'joinlive',
+          description: 'Start a Gemini Live voice session in your channel',
+          options: [],
+        },
+        {
+          name: 'leave',
+          description: 'Ask the bot to leave the voice channel',
+          options: [],
+        },
       ];
-      readyClient.application?.commands
-        .set(commands)
-        .then(() => console.log('📝 Slash commands registered'))
-        .catch((err) => console.error('Failed to register slash commands:', err));
+      const register = async () => {
+        try {
+          if (config.guildId) {
+            const guild = readyClient.guilds.cache.get(config.guildId) || await readyClient.guilds.fetch(config.guildId);
+            await guild.commands.set(commands);
+            console.log(`📝 Slash commands registered for guild ${config.guildId}`);
+          } else {
+            await readyClient.application?.commands.set(commands);
+            console.log('📝 Global slash commands registered');
+          }
+        } catch (err) {
+          console.error('Failed to register slash commands:', err);
+        }
+      };
+      register();
       g.__GA_LT_COMMANDS_REGISTERED = true;
     }
   });
@@ -542,7 +572,63 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
   client.on(Events.InteractionCreate, async (interaction: any) => {
     try {
       if (!interaction.isChatInputCommand?.()) return;
-      if (interaction.commandName !== 'chat') return;
+      if (interaction.commandName === 'join') {
+        const guild = interaction.guild;
+        const member = guild?.members?.cache?.get?.(interaction.user.id) || interaction.member;
+        const voiceChannel = (member && 'voice' in member) ? (member as any).voice?.channel : undefined;
+        if (!voiceChannel) {
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'You must be in a voice channel to use /join.' });
+          return;
+        }
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Joining your voice channel for a short listen…' });
+        const session = new VoiceSession(
+          voiceChannel,
+          member,
+          config.googleApiKey,
+          async (text: string) => {
+            try {
+              if (!text) {
+                await interaction.followUp({ flags: MessageFlags.Ephemeral, content: 'I didn’t catch anything clearly.' });
+              } else {
+                await interaction.followUp({ flags: MessageFlags.Ephemeral, content: `Heard: "${text}"` });
+              }
+            } catch {}
+          }
+        );
+        g.__GA_LT_VOICE_SESSION = session;
+        await session.start();
+        return;
+      } else if (interaction.commandName === 'joinlive') {
+        const guild = interaction.guild;
+        const member = guild?.members?.cache?.get?.(interaction.user.id) || interaction.member;
+        const voiceChannel = (member && 'voice' in member) ? (member as any).voice?.channel : undefined;
+        if (!voiceChannel) {
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'You must be in a voice channel to use /joinlive.' });
+          return;
+        }
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Starting Gemini Live session…' });
+        const live = new GeminiLiveSession(voiceChannel, member, config.googleApiKey, undefined, {
+          onTranscript: async (t: string) => {
+            try { if (t) await interaction.followUp({ flags: MessageFlags.Ephemeral, content: `Model: "${t}"` }); } catch {}
+          },
+          onError: async (e: unknown) => { console.warn('Gemini Live error:', e); },
+        } as any);
+        g.__GA_LT_VOICE_SESSION = live;
+        await live.start();
+        return;
+      } else if (interaction.commandName === 'leave') {
+        const session: any = g.__GA_LT_VOICE_SESSION;
+        if (!session) {
+          await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'I am not in a voice channel.' });
+          return;
+        }
+        await session.stop();
+        g.__GA_LT_VOICE_SESSION = undefined;
+        await interaction.reply({ flags: MessageFlags.Ephemeral, content: 'Left the voice channel.' });
+        return;
+      } else if (interaction.commandName !== 'chat') {
+        return;
+      }
 
       const cleanContent: string = interaction.options.getString('prompt', true);
 
