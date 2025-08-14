@@ -11,6 +11,7 @@ import { calculatorTool, timeTool } from './src/tools/examples/ExampleTool';
 import { weatherTool, randomFactTool } from './src/tools/examples/WeatherTool';
 import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGenerationTool';
 import webSearchTool from './src/tools/WebSearchTool';
+import summarizeContextTool from './src/tools/SummarizeContextTool';
 import { metrics } from './src/utils/Metrics';
 import { getImageCostUSD, getOpenAiPerTokenCostsUSD } from './src/utils/Pricing';
 import { startMetricsServer } from './src/metrics/DashboardServer';
@@ -111,6 +112,8 @@ const openaiLlm = new ChatOpenAI({
 
 // Initialize memory manager
 const memoryManager = new MemoryManager();
+// Expose memory manager globally so tools can access conversation history
+(g as any).__GA_LT_MEMORY_MANAGER = memoryManager;
 
 // Initialize tool registry and register example tools
 const toolRegistry = new ToolRegistry();
@@ -120,6 +123,7 @@ toolRegistry.registerTool(weatherTool);
 toolRegistry.registerTool(randomFactTool);
 toolRegistry.registerTool(imageGenerationTool);
   toolRegistry.registerTool(webSearchTool);
+  toolRegistry.registerTool(summarizeContextTool);
 
 // Circuit breaker state (global across hot reloads)
 type CircuitState = {
@@ -190,6 +194,30 @@ function getActiveModelName(): string {
 
 function getLlmWithTools() {
   return getActiveLlm().bindTools(toolRegistry.getToolDefinitions());
+}
+
+// Simple intent detection for summarization requests
+function detectSummarizeIntent(text: string): { isSummarize: boolean; requestedMin?: number } {
+  const lower = text.toLowerCase().trim();
+  const phrases = [
+    'summarize this channel',
+    'summarise this channel',
+    'summarize the channel',
+    'summarise the channel',
+    'what have i missed',
+    'what did i miss',
+    'catch me up',
+    'give me a summary',
+    'channel summary',
+    'tldr',
+    'tl;dr'
+  ];
+  if (phrases.some(p => lower.includes(p))) {
+    const match = lower.match(/last\s+(\d{1,3})\s+messages?/);
+    const requestedMin = match ? Math.max(1, Math.min(100, Number(match[1]))) : undefined;
+    return { isSummarize: true, requestedMin };
+  }
+  return { isSummarize: false };
 }
 
 async function invokeWithCircuitBreaker(messages: any[], callbacks: any[]) {
@@ -325,6 +353,76 @@ client.on(Events.MessageCreate, async (message: Message) => {
       cleanContent
     );
     
+    // Early intercept: if the user explicitly asked for a channel summary, run the summarize tool directly
+    const intent = detectSummarizeIntent(cleanContent);
+    if (intent.isSummarize) {
+      try {
+        const minMessages = intent.requestedMin ?? 15;
+        const maxMessages = Math.max(minMessages, Math.min(50, minMessages * 2));
+        const [toolResult] = await toolRegistry.executeTools([
+          {
+            name: 'summarize_context',
+            args: {
+              userId: message.author.id,
+              channelId: message.channel.id,
+              minMessages,
+              maxMessages,
+              useWeb: true,
+              appendDateToWebQueries: true,
+            },
+          },
+        ]);
+
+        const data: any = toolResult?.result || {};
+        const parts: string[] = [];
+        if (data.summary) parts.push(`**Summary**\n${data.summary}`);
+        if (Array.isArray(data.keyPoints) && data.keyPoints.length) {
+          parts.push(`**Key points**\n- ${data.keyPoints.slice(0, 10).join('\n- ')}`);
+        }
+        if (Array.isArray(data.actionItems) && data.actionItems.length) {
+          parts.push(`**Action items**\n- ${data.actionItems.slice(0, 10).join('\n- ')}`);
+        }
+        if (Array.isArray(data.openQuestions) && data.openQuestions.length) {
+          parts.push(`**Open questions**\n- ${data.openQuestions.slice(0, 10).join('\n- ')}`);
+        }
+        if (Array.isArray(data.webResults) && data.webResults.length) {
+          const srcs: string[] = [];
+          for (const wr of data.webResults) {
+            if (wr?.sources && wr.sources.length) {
+              for (const s of wr.sources.slice(0, 3)) {
+                srcs.push(`- ${s.title}: ${s.url}`);
+              }
+            }
+          }
+          if (srcs.length) parts.push(`**Sources**\n${srcs.join('\n')}`);
+        }
+        const content = parts.join('\n\n') || 'No summary available.';
+
+        // Add assistant reply to memory
+        await memoryManager.addMessage(
+          message.author.id,
+          message.channel.id,
+          'assistant',
+          content
+        );
+
+        // Clear patience timer before sending the final response
+        if (patienceTimeout) clearTimeout(patienceTimeout);
+        try { if (patienceMessageRef) await patienceMessageRef.delete(); } catch {}
+
+        const toolsUsed = data.usedWebSearch ? ['summarize_context', 'web_search'] : ['summarize_context'];
+        await EmbedResponse.sendLongResponse(message, content, {
+          title: '🧾 Channel Summary',
+          includeContext: true,
+          toolsUsed,
+        });
+        return;
+      } catch (summaryErr) {
+        console.error('Summarize intent handling failed:', summaryErr);
+        // Fall-through to normal LLM flow
+      }
+    }
+
     // Prepare messages for LangChain (conversationHistory already includes current context)
     const messages = [
       buildSystemMessage(),
@@ -371,6 +469,17 @@ client.on(Events.MessageCreate, async (message: Message) => {
           }
 
           imageToolUsed = true;
+        }
+        // Inject default context for summarize_context if args are missing
+        if (toolCall.name === 'summarize_context') {
+          toolCall.args = {
+            userId: toolCall.args?.userId || message.author.id,
+            channelId: toolCall.args?.channelId || message.channel.id,
+            minMessages: toolCall.args?.minMessages ?? 15,
+            maxMessages: toolCall.args?.maxMessages ?? 50,
+            useWeb: toolCall.args?.useWeb ?? true,
+            appendDateToWebQueries: toolCall.args?.appendDateToWebQueries ?? true,
+          };
         }
         const [result] = await toolRegistry.executeTools([toolCall]);
         metrics.recordToolCall(toolCall.name, !!result?.success);
@@ -566,6 +675,79 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
         cleanContent
       );
 
+      // Early intercept for summarize intent in slash command text
+      const intent = detectSummarizeIntent(cleanContent);
+      if (intent.isSummarize) {
+        try {
+          const minMessages = intent.requestedMin ?? 15;
+          const maxMessages = Math.max(minMessages, Math.min(50, minMessages * 2));
+          const [toolResult] = await toolRegistry.executeTools([
+            {
+              name: 'summarize_context',
+              args: {
+                userId: interaction.user.id,
+                channelId: interaction.channelId,
+                minMessages,
+                maxMessages,
+                useWeb: true,
+                appendDateToWebQueries: true,
+              },
+            },
+          ]);
+
+          const data: any = toolResult?.result || {};
+          const parts: string[] = [];
+          if (data.summary) parts.push(`**Summary**\n${data.summary}`);
+          if (Array.isArray(data.keyPoints) && data.keyPoints.length) {
+            parts.push(`**Key points**\n- ${data.keyPoints.slice(0, 10).join('\n- ')}`);
+          }
+          if (Array.isArray(data.actionItems) && data.actionItems.length) {
+            parts.push(`**Action items**\n- ${data.actionItems.slice(0, 10).join('\n- ')}`);
+          }
+          if (Array.isArray(data.openQuestions) && data.openQuestions.length) {
+            parts.push(`**Open questions**\n- ${data.openQuestions.slice(0, 10).join('\n- ')}`);
+          }
+          if (Array.isArray(data.webResults) && data.webResults.length) {
+            const srcs: string[] = [];
+            for (const wr of data.webResults) {
+              if (wr?.sources && wr.sources.length) {
+                for (const s of wr.sources.slice(0, 3)) {
+                  srcs.push(`- ${s.title}: ${s.url}`);
+                }
+              }
+            }
+            if (srcs.length) parts.push(`**Sources**\n${srcs.join('\n')}`);
+          }
+          const content = parts.join('\n\n') || 'No summary available.';
+
+          await memoryManager.addMessage(
+            interaction.user.id,
+            interaction.channelId,
+            'assistant',
+            content
+          );
+
+          // Publish summary to the channel
+          try {
+            const toolsUsed = data.usedWebSearch ? ['summarize_context', 'web_search'] : ['summarize_context'];
+            await interaction.channel?.sendTyping?.();
+            await EmbedResponse.sendLongResponse(
+              (interaction as any).channel?.lastMessage || interaction, // fallback shape
+              content,
+              { title: '🧾 Channel Summary', includeContext: true, toolsUsed }
+            );
+          } catch (sendErr) {
+            console.error('Failed to send channel summary (slash):', sendErr);
+          }
+
+          try { await interaction.editReply({ content: '✅ Summary posted in the channel.' }); } catch {}
+          return;
+        } catch (summaryErr) {
+          console.error('Summarize intent handling (slash) failed:', summaryErr);
+          // Fall-through to normal LLM flow
+        }
+      }
+
       const messages = [
         buildSystemMessage(),
         ...conversationHistory.map((msg: ConversationMessage) =>
@@ -627,6 +809,17 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
             }
 
             imageToolUsed = true;
+          }
+          // Inject default context for summarize_context if args are missing
+          if (toolCall.name === 'summarize_context') {
+            toolCall.args = {
+              userId: toolCall.args?.userId || interaction.user.id,
+              channelId: toolCall.args?.channelId || interaction.channelId,
+              minMessages: toolCall.args?.minMessages ?? 15,
+              maxMessages: toolCall.args?.maxMessages ?? 50,
+              useWeb: toolCall.args?.useWeb ?? true,
+              appendDateToWebQueries: toolCall.args?.appendDateToWebQueries ?? true,
+            };
           }
           const [result] = await toolRegistry.executeTools([toolCall]);
           if (result) {
