@@ -82,12 +82,22 @@ export const imageGenerationTool: BotTool = {
     } catch (error) {
       console.error('❌ Image generation failed:', error);
 
+      const anyErr: any = error as any;
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error occurred';
+      const status = typeof anyErr?.status === 'number' ? anyErr.status : (anyErr?.response?.status ?? undefined);
+      const errorCode = anyErr?.error?.code || anyErr?.code || undefined;
+      const errorType = anyErr?.error?.type || anyErr?.type || undefined;
+      const moderationBlocked =
+        errorCode === 'moderation_blocked' || /moderation|safety system/i.test(String(errorMessage));
       return {
         success: false,
         message: `Failed to generate image: ${errorMessage}`,
         error: errorMessage,
+        status,
+        errorCode,
+        errorType,
+        moderationBlocked,
       };
     }
   },
