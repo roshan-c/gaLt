@@ -533,6 +533,29 @@ client.on(Events.MessageCreate, async (message: Message) => {
             console.error('📎 Failed to create image attachment:', error);
           }
         }
+        // If image generation failed with moderation, surface a user-friendly message
+        if (toolCall.name === 'generate_image' && !result.success) {
+          const raw: any = result.result;
+          if (raw?.moderationBlocked) {
+            const friendly = '❌ Image request blocked by safety filters. Please adjust the prompt to avoid sensitive or disallowed content.';
+            // Add to memory and send a concise notice inline before continuing
+            try {
+              await memoryManager.addMessage(
+                message.author.id,
+                message.channel.id,
+                'assistant',
+                friendly
+              );
+            } catch {}
+            try {
+              await EmbedResponse.sendLongResponse(message, friendly, {
+                title: '⚠️ Moderation Notice',
+                includeContext: true,
+                toolsUsed: ['generate_image'],
+              });
+            } catch {}
+          }
+        }
       }
       
       console.log(`📎 Total attachments: ${attachments.length}`);
@@ -540,12 +563,15 @@ client.on(Events.MessageCreate, async (message: Message) => {
       // Add tool results to conversation and get final response
       const toolMessages = toolResults.map((result: ToolResult) => result.message);
       // Limit the amount of prior context to avoid huge token usage on the second call
-      const recentContext = messages.slice(-6);
+      // IMPORTANT: ensure only one system message at the very beginning
+      const recentContext = messages
+        .filter((m: any) => !(m instanceof SystemMessage))
+        .slice(-6);
       const finalResponse = await invokeWithCircuitBreaker([
         buildSystemMessage(),
         ...recentContext,
         response,
-        ...toolMessages
+        ...toolMessages,
       ], [tokenTracker]);
       
       // Add final response to memory
@@ -836,7 +862,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
           const toolCall = response.tool_calls[i];
           const result = toolResults[i];
           if (!toolCall || !result) continue;
-          if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
+           if (toolCall.name === 'generate_image' && result.success && !imageAlreadyAttached) {
             try {
               const rawResult: any = result.result;
               if (rawResult?.success && rawResult.imageBuffer) {
@@ -852,10 +878,35 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
               console.error('📎 Failed to create image attachment (slash):', err);
             }
           }
+          // If image generation failed with moderation on slash flow, surface notice publicly
+          if (toolCall.name === 'generate_image' && !result.success) {
+            const raw: any = result.result;
+            if (raw?.moderationBlocked) {
+              const friendly = '❌ Image request blocked by safety filters. Please adjust the prompt to avoid sensitive or disallowed content.';
+              try {
+                await memoryManager.addMessage(
+                  interaction.user.id,
+                  interaction.channelId,
+                  'assistant',
+                  friendly
+                );
+              } catch {}
+              try {
+                await interaction.channel?.sendTyping?.();
+                await EmbedResponse.sendLongResponse(
+                  (interaction as any).channel?.lastMessage || interaction,
+                  friendly,
+                  { title: '⚠️ Moderation Notice', includeContext: true, toolsUsed: ['generate_image'] }
+                );
+              } catch {}
+            }
+          }
         }
 
         const toolMessages = toolResults.map((tr: ToolResult) => tr.message);
-        const recentContext = messages.slice(-6);
+        const recentContext = messages
+          .filter((m: any) => !(m instanceof SystemMessage))
+          .slice(-6);
         const finalResponse = await invokeWithCircuitBreaker(
           [buildSystemMessage(), ...recentContext, response, ...toolMessages],
           [tokenTracker]
