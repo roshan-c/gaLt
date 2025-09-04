@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { BotTool } from './ToolRegistry';
 import OpenAI from 'openai';
-import webSearchTool from './WebSearchTool';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -145,21 +144,25 @@ export const summarizeContextTool: BotTool = {
     }> = [];
 
     if ((args.useWeb ?? true) && externalQueries.length > 0) {
-      // Limit to a few focused queries
+      const toolRegistry = (globalThis as any).__GA_LT_TOOL_REGISTRY;
+      const hasRegistry = toolRegistry && typeof toolRegistry.executeTools === 'function';
       const limitedQueries = externalQueries.slice(0, 3);
-      for (const query of limitedQueries) {
-        try {
-          const result = await webSearchTool.execute({
-            query,
-            count: 3,
-            deep: true,
-            appendDate: args.appendDateToWebQueries ?? true,
-            maxSnippetLength: 300,
-          });
-          webResults.push({ query, ...result });
-        } catch (err) {
-          webResults.push({ query, summary: 'Web search failed for this query.', keyPoints: [], sources: [] });
+      if (!hasRegistry) {
+        for (const q of limitedQueries) {
+          const query = String(q ?? '');
+          webResults.push({ query, summary: 'Web search unavailable (registry missing).', keyPoints: [], sources: [], meta: { reliable: false } });
         }
+      } else {
+        const calls = limitedQueries.map((q) => ({ name: 'web_search', args: { query: q, count: 3, deep: true, appendDate: args.appendDateToWebQueries ?? true, maxSnippetLength: 300 } }));
+        const settledResults = await Promise.allSettled(calls.map((c: any) => toolRegistry.executeTools([c])));
+        settledResults.forEach((res, idx) => {
+          const query = String(limitedQueries[idx] ?? '');
+          if (res.status === 'fulfilled' && Array.isArray(res.value) && res.value[0]?.success) {
+            webResults.push({ query, ...(res.value[0].result || {}) });
+          } else {
+            webResults.push({ query, summary: 'Web search failed for this query.', keyPoints: [], sources: [] });
+          }
+        });
       }
     }
 
@@ -177,5 +180,3 @@ export const summarizeContextTool: BotTool = {
 };
 
 export default summarizeContextTool;
-
-

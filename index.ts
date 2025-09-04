@@ -120,10 +120,12 @@ const toolRegistry = new ToolRegistry();
 toolRegistry.registerTool(calculatorTool);
 toolRegistry.registerTool(timeTool);
 toolRegistry.registerTool(weatherTool);
-toolRegistry.registerTool(randomFactTool);
-toolRegistry.registerTool(imageGenerationTool);
+  toolRegistry.registerTool(randomFactTool);
+  toolRegistry.registerTool(imageGenerationTool);
   toolRegistry.registerTool(webSearchTool);
   toolRegistry.registerTool(summarizeContextTool);
+  (g as any).__GA_LT_TOOL_REGISTRY = toolRegistry;
+
 
 // Circuit breaker state (global across hot reloads)
 type CircuitState = {

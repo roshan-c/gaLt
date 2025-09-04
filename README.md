@@ -12,6 +12,7 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
   - [Patience message behavior](#patience-message-behavior)
   - [Circuit breaker behavior](#circuit-breaker-behavior)
   - [Metrics dashboard](#metrics-dashboard)
+- [📚 Documentation](#-documentation)
 - [Project Structure](#project-structure)
 - [Creating Custom Tools](#creating-custom-tools)
 - [Built-in Tools](#built-in-tools)
@@ -129,10 +130,36 @@ An intelligent Discord bot built with TypeScript, Discord.js, LangChain, and Ope
   - API: `GET /api/metrics` (JSON with daily aggregates)
 - Tracks: requests, tokens (in/out/total + cost), tool calls, images (with cost).
 
+## 📚 Documentation
+
+Comprehensive documentation is available in the `docs/` directory:
+
+| Document | Description | Audience |
+|----------|-------------|----------|
+| **[📖 User Guide](./docs/USER_GUIDE.md)** | Complete user manual with examples and best practices | Users |
+| **[🔧 API Documentation](./docs/API.md)** | Complete API reference for all components | Developers |
+| **[👨‍💻 Developer Guide](./docs/DEVELOPER_GUIDE.md)** | Technical development workflows and best practices | Developers |
+| **[🚀 Deployment Guide](./docs/DEPLOYMENT.md)** | Production deployment and infrastructure setup | DevOps/Admins |
+| **[🏗️ Architecture Documentation](./docs/ARCHITECTURE.md)** | System design and technical architecture | Architects/Senior Devs |
+| **[📚 Documentation Index](./docs/README.md)** | Complete documentation overview | Everyone |
+
+### Quick Links
+- **New users**: Start with the [📖 User Guide](./docs/USER_GUIDE.md)
+- **Developers**: Check the [👨‍💻 Developer Guide](./docs/DEVELOPER_GUIDE.md) and [🔧 API Documentation](./docs/API.md)
+- **Deployment**: Follow the [🚀 Deployment Guide](./docs/DEPLOYMENT.md)
+- **Architecture**: Review the [🏗️ Architecture Documentation](./docs/ARCHITECTURE.md)
+
 ## 🔧 Project Structure
 
 ```
 gaLt/
+├── docs/                         # 📚 Comprehensive documentation
+│   ├── README.md                 # Documentation overview
+│   ├── USER_GUIDE.md             # User manual and examples
+│   ├── API.md                    # Complete API reference
+│   ├── DEVELOPER_GUIDE.md        # Development workflows
+│   ├── DEPLOYMENT.md             # Production deployment guide
+│   └── ARCHITECTURE.md           # System architecture docs
 ├── src/
 │   ├── memory/
 │   │   └── MemoryManager.ts      # RAG conversation memory
