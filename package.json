@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@chroma-core/default-embed": "^0.1.8",
+    "@google/genai": "^1.17.0",
     "@langchain/community": "^0.3.0",
     "@langchain/core": "^0.3.0",
     "@langchain/google-genai": "^0.1.0",
