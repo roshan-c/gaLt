@@ -12,6 +12,7 @@ import { weatherTool, randomFactTool } from './src/tools/examples/WeatherTool';
 import { imageGenerationTool, createImageAttachment } from './src/tools/ImageGenerationTool';
 import webSearchTool from './src/tools/WebSearchTool';
 import summarizeContextTool from './src/tools/SummarizeContextTool';
+import mcGetCodeTool from './src/tools/McApiGetCodeTool';
 import { metrics } from './src/utils/Metrics';
 import { getImageCostUSD, getOpenAiPerTokenCostsUSD } from './src/utils/Pricing';
 import { startMetricsServer } from './src/metrics/DashboardServer';
@@ -124,6 +125,7 @@ toolRegistry.registerTool(randomFactTool);
 toolRegistry.registerTool(imageGenerationTool);
   toolRegistry.registerTool(webSearchTool);
   toolRegistry.registerTool(summarizeContextTool);
+  toolRegistry.registerTool(mcGetCodeTool);
 
 // Circuit breaker state (global across hot reloads)
 type CircuitState = {
@@ -257,6 +259,16 @@ function buildSystemMessage(): SystemMessage {
     .replace(/\{\{DATETIME\}\}/g, new Date().toString())
     .replace(/\{\{TOOLS\}\}/g, toolsList);
   return new SystemMessage(rendered);
+}
+
+function stripSpeakerLabelHead(text: string): string {
+  if (!text) return text as any;
+  return text.replace(/^\s*(Aigis|Assistant|System|Bot)\s*[:\-—–]\s*/i, '');
+}
+
+function cleanAssistantContent(text: string): string {
+  const stripped = stripSpeakerLabelHead(text);
+  return typeof stripped === 'string' ? stripped.trim() : (text as any);
 }
 
 // Bot ready event
@@ -573,13 +585,14 @@ client.on(Events.MessageCreate, async (message: Message) => {
         response,
         ...toolMessages,
       ], [tokenTracker]);
+      const cleanedFinal = cleanAssistantContent(finalResponse.content as string);
       
       // Add final response to memory
       await memoryManager.addMessage(
         message.author.id,
         message.channel.id,
         'assistant',
-        finalResponse.content as string
+        cleanedFinal
       );
       
       // Get token usage stats
@@ -595,7 +608,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       console.log(`📊 Token usage: ${tokenUsage.inputTokens} input, ${tokenUsage.outputTokens} output, ${tokenUsage.totalTokens} total`);
       
       // Send response to Discord using embeds with tool indicators
-      const responseContent = finalResponse.content as string;
+      const responseContent = cleanedFinal;
       const stats = EmbedResponse.getResponseStats(responseContent);
       console.log(`📨 Sending response: ${stats.length} chars, ${stats.chunks} chunks, embeds: ${stats.willUseEmbeds}`);
       
@@ -618,7 +631,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       );
     } else {
       // No tool calls, just respond with the content
-      const responseContent = response.content as string;
+      const responseContent = cleanAssistantContent(response.content as string);
       
       // Add response to memory
       await memoryManager.addMessage(
@@ -907,20 +920,21 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
         const recentContext = messages
           .filter((m: any) => !(m instanceof SystemMessage))
           .slice(-6);
-        const finalResponse = await invokeWithCircuitBreaker(
-          [buildSystemMessage(), ...recentContext, response, ...toolMessages],
-          [tokenTracker]
-        );
-
-        await memoryManager.addMessage(
-          interaction.user.id,
-          interaction.channelId,
-          'assistant',
-          finalResponse.content as string
-        );
-
-        // Send final response publicly in the same channel
-        try {
+          const finalResponse = await invokeWithCircuitBreaker(
+            [buildSystemMessage(), ...recentContext, response, ...toolMessages],
+            [tokenTracker]
+          );
+          const cleanedFinal = cleanAssistantContent(finalResponse.content as string);
+ 
+          await memoryManager.addMessage(
+            interaction.user.id,
+            interaction.channelId,
+            'assistant',
+            cleanedFinal
+          );
+ 
+          // Send final response publicly in the same channel
+          try {
           if (attachments.length > 0 && imagePrompt) {
             const embed: any = {
               color: 0x5865f2,
@@ -934,9 +948,10 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
               files: attachments,
               allowedMentions: { repliedUser: false },
             });
-          } else {
-            const responseContent = finalResponse.content as string;
-            const chunks = EmbedResponse.chunkContent(responseContent);
+            } else {
+              const responseContent = cleanedFinal;
+              const chunks = EmbedResponse.chunkContent(responseContent);
+
             const embeds = chunks.slice(0, 10).map((chunk, idx) => {
               const footerInfo: string[] = [];
               if (idx === chunks.length - 1) {
@@ -978,7 +993,7 @@ if (!g.__GA_LT_INTERACTION_LISTENER) {
         }
       } else {
         // No tools used; just send content publicly
-        const responseContent = response.content as string;
+        const responseContent = cleanAssistantContent(response.content as string);
         await memoryManager.addMessage(
           interaction.user.id,
           interaction.channelId,
